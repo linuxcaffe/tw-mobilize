@@ -68,6 +68,14 @@ cd ~/dev/tw-web && pip install -r requirements.txt   # pkg install clang if a bu
 python app.py                                         # then http://localhost:5000 in the browser
 ```
 
+**Reaching the phone from another station** (the feather's direct route, and how Claude Code ran step 4
+on `s5`): `pkg install openssh`, add the other station's public key to `~/.ssh/authorized_keys`, run
+`sshd` (port 8022); on the other station, a `Host s5` entry with the phone's current address and
+`Port 8022`. The address changes with the network; `termux-wake-lock` keeps Termux alive.
+
+On `s5` (2026-10-21) tw-web installed with no compiler (Python 3.13, Werkzeug 3.1.9) and served the same
+104 pending tasks as `yoga`.
+
 **Until the feather exists, don't `git push` from a second station.** Its auto-commits stay local;
 `git checkout -- pending.data completed.data` throws test writes away.
 
