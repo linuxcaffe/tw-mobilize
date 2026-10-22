@@ -91,6 +91,8 @@ On `s5` (2026-10-21) tw-web installed with no compiler (Python 3.13, Werkzeug 3.
 | Three scripts point at `yoga` paths | `make-awesome.py`, `tw-sync`, `tw-web` are symlinks to `/home/<user>/dev/…` | `check` lists dangling symlinks |
 | `included.rc`/`themes.rc` had `include /home/<user>/.task/…` | installers and `theme-select.py` write absolute paths | rewritten as `~/.task/…` on `yoga`; the writers get fixed in awesome-taskwarrior. `check`: no `/home/<user>` in rc files |
 
+| A read changed `pending.data` on `s5` | 2.6.2 expires `until:` tasks on any command (`export` too, even with `rc.gc=off`); gc and built-in recurrence also write on reads | not a tool bug: the feather's rule (a device without it never commits data; `gittw take` saves local data changes, then resets to the remote). `check` reports uncommitted data changes on a device without the feather |
+
 What carried over without trouble: exec bits (git keeps them), `#!/usr/bin/env python3` shebangs, every
 hook's `~/.task` lookup (`Path.home()`, never a hard-coded home), tw-web's runtime folder (no
 `XDG_RUNTIME_DIR` in Termux, so its `~/.cache/tw-web` fallback applies), and the Calendar's holidays and
