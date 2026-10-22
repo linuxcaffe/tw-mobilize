@@ -93,6 +93,9 @@ On `s5` (2026-10-21) tw-web installed with no compiler (Python 3.13, Werkzeug 3.
 
 | A read changed `pending.data` on `s5` | 2.6.2 expires `until:` tasks on any command (`export` too, even with `rc.gc=off`); gc and built-in recurrence also write on reads | not a tool bug: the feather's rule (a device without it never commits data; `gittw take` saves local data changes, then resets to the remote). `check` reports uncommitted data changes on a device without the feather |
 
+| Fewer contexts in tw-web on `s5` (`need`, `tod`) | both are written by hooks: `context.need.read` in `need.rc` (tracked, but the hook rewrites it; the committed copy is blank) and `context.tod.read` in `tod.rc` (gitignored). With `hooks=off` nothing fills them | expected until the station runs those hooks; `check` lists contexts that are empty |
+| tw-web: "Network error: Failed to fetch", no contexts | Android stopped Termux, so the server died (its log ends 13:42); the page itself came from the service worker's cache | `termux-wake-lock`, Termux set to "unrestricted" battery use, and a launcher that starts the server if it's down. tw-web could say "the tw-web server isn't running" instead |
+
 What carried over without trouble: exec bits (git keeps them), `#!/usr/bin/env python3` shebangs, every
 hook's `~/.task` lookup (`Path.home()`, never a hard-coded home), tw-web's runtime folder (no
 `XDG_RUNTIME_DIR` in Termux, so its `~/.cache/tw-web` fallback applies), and the Calendar's holidays and
