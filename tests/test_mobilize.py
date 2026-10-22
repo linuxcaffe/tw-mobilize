@@ -291,3 +291,61 @@ def test_waiting_for_a_key_under_tw_noninteract_asks_for_a_terminal(home, monkey
     err = capsys.readouterr().err
     sig = json.loads(err.strip().splitlines()[-1])
     assert sig['type'] == 'tw_needs_pty' and 'codeberg.org' in sig['reason']
+
+
+# ── the hook pre-test ─────────────────────────────────────────────────────────
+
+HOOKS = {
+    'on-add_good.sh': '#!/bin/sh\nread t; echo "$t"\n',
+    'on-add_bad.sh': '#!/bin/sh\nread t; echo "this hook refuses"; exit 1\n',
+    'on-launch_slow.sh': '#!/bin/sh\nsleep 0.5\n',
+    'on-add_writer.sh': '#!/bin/sh\nread t; touch "$HOME/.task/config/touched"; echo "$t"\n',
+    'on-modify_good.sh': '#!/bin/sh\nread a; read b; echo "$b"\n',
+}
+
+
+@pytest.fixture
+def station(home):
+    t = home / '.task'
+    (t / 'hooks').mkdir(parents=True)
+    (t / 'config').mkdir()
+    (t / 'scripts').mkdir()
+    (t / '.taskrc').write_text(f'data.location=~/.task\nconfidential.path={home}/.task/config\n')
+    (home / '.taskrc').symlink_to(t / '.taskrc')
+    for name, text in HOOKS.items():
+        (t / 'hooks' / name).write_text(text)
+        (t / 'hooks' / name).chmod(0o755)
+    (t / 'hooks' / 'on-add_off.sh').write_text('#!/bin/sh\nexit 1\n')
+    return t
+
+
+def test_pretest_judges_each_hook_and_all_together(station, capsys):
+    rows = {h: (st, n) for h, st, r, tot, n in mobilize.hook_pretest()}
+    assert rows['on-add_good.sh'][0] == 'ok'
+    assert rows['on-modify_good.sh'][0] == 'ok'
+    assert rows['on-add_bad.sh'][0] == 'fail' and 'this hook refuses' in rows['on-add_bad.sh'][1]
+    assert rows['on-launch_slow.sh'][0] == 'warn' and 'every read' in rows['on-launch_slow.sh'][1]
+    assert rows['(all together)'][0] == 'fail', 'the bad hook spoils the chain'
+    assert rows['on-add_off.sh'] == ('skip', 'not executable: off')
+
+
+def test_pretest_never_touches_the_real_task_dir(station):
+    before = sorted(p.relative_to(station) for p in station.rglob('*'))
+    mobilize.hook_pretest()
+    assert sorted(p.relative_to(station) for p in station.rglob('*')) == before
+    assert not (station / 'config' / 'touched').exists()
+    assert not list(station.glob('*.data'))
+
+
+def test_pretest_sandbox_points_real_home_paths_inside_it(station, tmp_path):
+    t, env = mobilize._sandbox(tmp_path / 'sb')
+    assert env['HOME'] == str(tmp_path / 'sb' / 'home') and env['TASKRC'] == str(t / '.taskrc')
+    assert f'confidential.path={tmp_path}/sb/home/.task/config' in (t / '.taskrc').read_text()
+    assert (t / 'scripts').is_symlink(), 'big read-only folders are linked, not copied'
+
+
+def test_check_hooks_cli(station, capsys):
+    code = mobilize.main(['check', '--hooks', '--json'])
+    data = json.loads(capsys.readouterr().out)
+    assert code == 2
+    assert {d['hook'] for d in data} >= {'on-add_good.sh', '(all together)'}

@@ -16,6 +16,11 @@ Commands
                                   Nothing is deleted: what's in the way is moved
                                   aside (*.pre-mobilize-<time>). Ends with `check`.
   mobilize check [--json]         Read-only. Is this station still set up?
+  mobilize check --hooks [--json] The hook pre-test: run this station's hooks, one at a
+                                  time and then together, through real task commands
+                                  (add, modify, annotate, done, list) in a sandbox copy
+                                  of ~/.task, and time each against no hooks. Never
+                                  touches your tasks or your hooks' real files.
   mobilize stations               The stations mobilize.rc knows about.
   mobilize -e [local]             Edit mobilize.rc (shared by every station), or this
                                   station's local.rc, in $VISUAL / $EDITOR.
@@ -40,11 +45,13 @@ import shlex
 import shutil
 import socket
 import subprocess
+import tempfile
+import time
 import sys
 import urllib.request
 from pathlib import Path
 
-__version__ = '0.1.0'
+__version__ = '0.2.0'
 
 OK, DONE, WOULD, SKIP, WARN, FAIL, YOU = 'ok', 'done', 'would', 'skip', 'warn', 'fail', 'you'
 
@@ -869,6 +876,128 @@ def checks():
     return out
 
 
+# ── the hook pre-test ─────────────────────────────────────────────────────────
+
+PRETEST_SLOW_READ_MS = 300      # a hook adding more than this to every read is slow on this station
+PRETEST_TIMEOUT = 20
+PRETEST_NOISE_MS = 40           # less than this is run-to-run noise
+PRETEST_LINKED = ('scripts', 'awesome-taskwarrior', 'docs', 'themes', 'templates')   # read-only: linked, not copied
+
+
+def _sandbox(root):
+    """A throwaway home holding a copy of this station's ~/.task (no data, no git), and the
+    environment that keeps every hook inside it: HOME, TW_TASK_DIR, TASKRC, TASKDATA, and the
+    places hooks write outside ~/.task (LEDGER_FILE, NB_DIR, TW_SPOOL_DIR)."""
+    real, home = task_dir(), root / 'home'
+    t = home / '.task'
+    skip = shutil.ignore_patterns('.git', '*.data', 'logs', 'time', '__pycache__', *PRETEST_LINKED)
+    shutil.copytree(real, t, symlinks=True, ignore=skip)
+    for name in PRETEST_LINKED:
+        if (real / name).exists():
+            (t / name).symlink_to(real / name)
+    for name in ('logs', 'time'):
+        (t / name).mkdir(exist_ok=True)
+    # Absolute paths to the real home, in the copied settings, point into the sandbox instead
+    real_home = str(Path.home()) + '/'
+    for f in [t / '.taskrc', t / 'local.rc', *(t / 'config').glob('*.rc')]:
+        if f.is_file() and not f.is_symlink():
+            text = f.read_text(errors='replace')
+            if real_home in text:
+                f.write_text(text.replace(real_home, str(home) + '/'))
+    (home / '.taskrc').symlink_to(t / '.taskrc')
+    env = dict(os.environ, HOME=str(home), TW_TASK_DIR=str(t), TASKRC=str(t / '.taskrc'),
+               LEDGER_FILE=str(root / 'sandbox.journal'), NB_DIR=str(root / 'nb'),
+               TW_SPOOL_DIR=str(root / 'spool'), TW_NOINTERACT='1', TW_CLIENT='mobilize-pretest',
+               GIT_CEILING_DIRECTORIES=str(root))
+    return t, env
+
+
+def _pretest_run(hooks_dir, data, env):
+    """The sequence, in a fresh database: (ms per command, first error or '', all ok?)."""
+    data.mkdir(parents=True)
+    env = dict(env, TASKDATA=str(data))
+    base = ['task', 'rc.confirmation=no', 'rc.gc=on', 'rc.recurrence.confirmation=no']
+    base += ([f'rc.hooks.location={hooks_dir}', 'rc.hooks=on'] if hooks_dir else ['rc.hooks=off'])
+    steps = [('add', ['add', 'project:pretest', '+mtest', 'due:tomorrow', '--', 'mobilize hook pre-test']),
+             ('modify', ['1', 'modify', '+mtest2', 'priority:M']),
+             ('annotate', ['1', 'annotate', '--', 'checked by mobilize']),
+             ('done', ['1', 'done']),
+             ('list', ['list'])]
+    times, error = {}, ''
+    for name, args in steps:
+        t0 = time.monotonic()
+        try:
+            r = subprocess.run(base + args, env=env, capture_output=True, text=True,
+                               stdin=subprocess.DEVNULL, timeout=PRETEST_TIMEOUT)
+        except subprocess.TimeoutExpired:
+            return times, f'{name}: no answer within {PRETEST_TIMEOUT} s (waiting for input?)', False
+        times[name] = (time.monotonic() - t0) * 1000
+        text = r.stdout + r.stderr
+        bad = [l for l in text.splitlines()
+               if re.search(r'Hook Error|Traceback|Error:|error:|No such file', l)]
+        if not error and (bad or (r.returncode and name != 'list')):
+            error = f"{name}: {(bad or text.strip().splitlines() or ['exit %d' % r.returncode])[-1].strip()}"
+    r = subprocess.run(['task', 'rc.hooks=off', 'status:completed', 'count'], env=dict(env, TASKDATA=str(data)),
+                       capture_output=True, text=True)
+    if not error and r.stdout.strip() != '1':
+        error = f'the test task did not end up completed ({r.stdout.strip() or r.stderr.strip()})'
+    return times, error, not error
+
+
+def hook_pretest():
+    """[(hook, status, added ms on a read, added ms in all, note)], the last row for all together."""
+    s = settings()
+    hdir = Path(s.get('hooks.location') or task_dir() / 'hooks').expanduser()
+    names = sorted(p.name for p in hdir.glob('on-*') if p.is_file() and os.access(p, os.X_OK))
+    off = sorted(p.name for p in hdir.glob('on-*') if p.is_file() and not os.access(p, os.X_OK))
+    rows = []
+    with tempfile.TemporaryDirectory(prefix='mobilize-pretest-') as tmp:
+        root = Path(tmp)
+        t, env = _sandbox(root)
+        assert str(t).startswith(tmp) and t != task_dir()
+        sand_hooks = t / 'hooks' if hdir.resolve() == (task_dir() / 'hooks').resolve() else hdir
+        # The baseline: no hooks, fastest of three runs (the first warms the caches)
+        base = {}
+        for n in range(3):
+            times, err, ok = _pretest_run(None, root / f'data-baseline-{n}', env)
+            if not ok:
+                return [('(no hooks)', FAIL, 0, 0, f'task itself fails in the sandbox: {err}')]
+            base = {k: min(v, base.get(k, v)) for k, v in times.items()}
+        def row(label, hooks_dir, data):
+            times, err, ok = _pretest_run(hooks_dir, data, env)
+            read = max(0.0, times.get('list', 0) - base['list']) if 'list' in times else 0
+            total = max(0.0, sum(times.get(k, 0) - base[k] for k in base if k in times))
+            status = FAIL if not ok else WARN if read > PRETEST_SLOW_READ_MS else OK
+            note = err or (f'slow: +{read:.0f} ms on every read' if status == WARN else '')
+            return (label, status, read, total, note)
+        for i, name in enumerate(names):
+            one = root / f'one-{i}'
+            one.mkdir()
+            (one / name).symlink_to(sand_hooks / name)
+            rows.append(row(name, one, root / f'data-{i}'))
+        if names:
+            rows.append(row('(all together)', sand_hooks, root / 'data-all'))
+    rows += [(name, SKIP, 0, 0, 'not executable: off') for name in off]
+    return rows
+
+
+def pretest(as_json=False, out=print):
+    rows = hook_pretest()
+    if as_json:
+        out(json.dumps([{'hook': h, 'status': st, 'read_ms': round(r), 'total_ms': round(t), 'note': n}
+                        for h, st, r, t, n in rows], indent=2))
+    else:
+        station = read_rc(local_rc()).get('gittw.device', 'this station')
+        out(f'mobilize check --hooks  ({station}; added time vs. no hooks: on a read, and over '
+            'add+modify+annotate+done+list)')
+        for h, st, r, t, n in rows:
+            fmt = lambda ms, w: (f'+{ms:.0f} ms' if ms >= PRETEST_NOISE_MS else '~0').rjust(w)
+            times = f'{fmt(r, 9)} {fmt(t, 10)}' if st != SKIP else ' ' * 20
+            out(f'  {st:5} {h:<36} {times}  {n}')
+    worst = {r[1] for r in rows}
+    return 2 if FAIL in worst else 1 if WARN in worst else 0
+
+
 def check(as_json=False, out=print):
     rows = checks()
     if as_json:
@@ -927,6 +1056,7 @@ def main(argv=None):
     i.add_argument('--yes', action='store_true', help='never ask (an SSH key gets no passphrase)')
     c = sub.add_parser('check', help='is this station still set up? (read-only)')
     c.add_argument('--json', action='store_true')
+    c.add_argument('--hooks', action='store_true', help='the hook pre-test (a sandbox; takes a while)')
     sub.add_parser('stations', help='the stations mobilize.rc knows about')
     a = p.parse_args(argv)
     if a.edit:
@@ -936,7 +1066,7 @@ def main(argv=None):
     if a.cmd == 'stations':
         return show_stations()
     if a.cmd == 'check':
-        return check(a.json)
+        return pretest(a.json) if a.hooks else check(a.json)
     p.print_help()
     return 0
 
