@@ -7,10 +7,23 @@ Set up a new Taskwarrior 2.6.2 station (an Android phone in Termux, or another L
 existing [gittw](https://github.com/linuxcaffe/gittw) repo, with [tw-web](https://github.com/linuxcaffe/tw-web)
 running on it, and check that it stays set up.
 
-**Status: 0.1.0, testing** (`tw -I mobilize`, or the `curl` bootstrap below). `mobilize init`, `check`, `stations` and `-e` work and are tested
-(pytest, in a fake home folder). Still planned: `check --hooks` (the hook pre-test) and hook sets per
-platform. This README also keeps what was learned setting up the first phone by hand (2026-10-21). Decisions and progress live in the
-plan: `tw:docs/tw-web-android-plan.md`.
+## ▶ Quick start: a new phone
+
+**In [Termux](https://f-droid.org/packages/com.termux/) (from F-Droid), three lines:**
+
+```bash
+pkg install python git openssh curl
+curl -fLO https://raw.githubusercontent.com/linuxcaffe/tw-mobilize/main/mobilize.py
+python mobilize.py init --station <name> --data <your gittw repo's fetch URL>
+```
+
+**`init` installs Taskwarrior 2.6.2, clones your tasks, sets up the station and tw-web, then checks it.**
+It stops once to show you an SSH key to add to GitHub/Codeberg, and waits until you have. Safe to run
+again: it picks up where it left off. On a station that already has your tasks: `tw -I mobilize`.
+
+**Status: 0.1.0, testing.** `mobilize init`, `check`, `stations` and `-e` work and are tested (pytest, in
+a fake home folder). Still planned: `check --hooks` (the hook pre-test) and hook sets per platform. This
+README also keeps what was learned setting up the first phone by hand (2026-10-21).
 
 ## TL;DR
 
