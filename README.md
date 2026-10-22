@@ -26,7 +26,7 @@ that's Termux, not mobilize. Run `termux-change-repo` (pick a mirror group near 
 `pkg upgrade`, then the three lines again. Termux is a rolling release: a long-unused install needs
 upgrading before it installs anything.
 
-**Status: 0.6.0, testing.** `mobilize init`, `check`, `stations` and `-e` work and are tested (pytest, in
+**Status: 0.6.1, testing.** `mobilize init`, `check`, `stations` and `-e` work and are tested (pytest, in
 a fake home folder). `check --hooks` (the hook pre-test) since 0.2.0; `hooks` (each station's chosen hooks) since 0.3.0; since 0.5.0 the Termux launcher restarts tw-web when it dies, and opening Termux starts it; since 0.6.0 `mobilize android` walks through the phone's own settings. This
 README also keeps what was learned setting up the first phone by hand (2026-10-21).
 
@@ -106,6 +106,9 @@ What mobilize can't do from inside Termux. Worked out on `s5` (Huawei P20, EMUI,
      started. Android 14+: Developer options → **Disable child process restrictions**; 12–13:
      `adb shell device_config put activity_manager max_phantom_processes 2147483647` from a computer.
    - Other makers: dontkillmyapp.com.
+   - **Power saving mode off** while you rely on tw-web: battery saver (and Huawei's Ultra power
+     saving) stops background apps whatever the per-app settings say. On again when you don't
+     need tw-web is fine: opening Termux or tapping the widget brings it back.
 2. **Lock Termux in recent apps** (Huawei and others that clear it): open Termux, open the
    recent-apps view (the □ button; with gestures, swipe up from the bottom edge and pause; with
    the fingerprint-sensor navigation key, swipe across the sensor), and drag Termux's card (the
@@ -113,6 +116,9 @@ What mobilize can't do from inside Termux. Worked out on `s5` (Huawei P20, EMUI,
 3. **Add the widget:** install Termux:Widget (F-Droid, same source as Termux). Long-press the
    home screen → Widgets → Termux:Widget → **Termux shortcut** → `tw-web` (or the list widget,
    which shows everything in `~/.shortcuts`; tap its refresh icon if it's empty).
+   Its icon is tw-web's menu logo: `mobilize init` copies `tw-logo.png` to
+   `~/.shortcuts/icons/tw-web.png`, where Termux:Widget looks. A widget added before the icon
+   was there keeps the plain one: remove it and add it again.
 4. **Allow "Display over other apps" for Termux** (Android 10+): Termux asks the first time the
    widget runs, because a widget tap opens a Termux session from the background. EMUI hides the
    setting (Settings search finds nothing); open it straight from Termux:
@@ -139,7 +145,17 @@ sshd -t && pkill -HUP -x sshd      # reload the running one in place
 
 Check from another machine: `ssh -v -o PubkeyAuthentication=no <phone> true` must list only
 `publickey`. `mobilize check` on the phone warns while sshd accepts passwords, and when a
-hand-started sshd and the termux-services one are both set to run. It dies with Termux like everything else; start it again with `sshd`. If you use
+hand-started sshd and the termux-services one are both set to run. It dies with Termux like everything else. Better than starting it by hand: let termux-services
+run it, so it comes back by itself (`pkg install termux-services`, then `pkill -x sshd; sv-enable sshd`);
+its log is then in `$PREFIX/var/log/sv/sshd/current`.
+
+**Keeping ssh reachable** (it dropped every few minutes on `s5`):
+- Settings → Wi-Fi → ⋮ / Configure → Advanced → **Keep Wi-Fi on during sleep: Always**
+  (Huawei's default turns wifi off with the screen).
+- **Wi-Fi+ off** (Huawei; others call it "Adaptive Wi-Fi" or "Switch to mobile data"): it moves the
+  phone to mobile data, and its wifi address is gone.
+- A fixed address for the phone in your router (a DHCP reservation), so `ssh <phone>` finds it.
+- Termux holds a wake lock while tw-web runs (the launcher takes it), which keeps sshd from sleeping too. If you use
 termux-services (`sv-enable sshd`) instead, don't also start it by hand: the hand-started one
 holds port 8022 and the service fails every second ("Address already in use"), and in an ssh
 command `sv` needs `SVDIR=$PREFIX/var/service`.
@@ -214,6 +230,7 @@ On `s5` (2026-10-21) tw-web installed with no compiler (Python 3.13, Werkzeug 3.
 | Termux:API app installed, `termux-job-scheduler` missing | the app and its command-line package (`pkg install termux-api`) are separate | needed for scheduled sync (planned) |
 | sshd on s5 accepted passwords | Termux's default | keys only since 2026-10-22 (section above); a `sv restart` from ssh failed (`SVDIR`) and then fought the hand-started sshd for the port |
 | **Widget → tw-web, 2026-10-22 12:59:** restart loop + server up, tasks intact | | the offline test follows |
+| ssh to `s5` dropped every few minutes ("Connection reset" in the handshake, then timeouts) | wifi asleep with the screen off, and a hand-started sshd | wifi kept on during sleep, Wi-Fi+ off, sshd under termux-services ("Keeping ssh reachable") |
 | Completing a task in tw-web (widget-started): `Failed to execute '…/hooks.d/s5/on-modify_need-priority.py': No such file or directory` | Termux:Widget runs the launcher in a bare environment: no `LD_PRELOAD` (termux-exec, which makes `#!/usr/bin/env python3` work on Android) and no `~/.task/scripts` on `PATH`. Over ssh and in a Termux session both are set, so the pre-test passed. `.bashrc` can't help: the widget doesn't start bash | 0.6.0: the launcher sets both when missing; `check` reads the running server's environment and warns |
 
 | **Hook pre-test, 2026-10-22** (`mobilize check --hooks`, 25 hooks): `yoga` +0.33 s on a read with all hooks, `s5` **+4.3 s on a read and +33 s over five commands**: each Python hook costs ~0.05 s on the laptop, 0.4–0.75 s on the phone (Python start-up) | the phone needs a small hook set; tw-web's reads already run with hooks off, but every write fires the on-launch, on-add/modify and on-exit chains | choose the `mobile` set by these numbers |

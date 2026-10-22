@@ -63,7 +63,7 @@ import sys
 import urllib.request
 from pathlib import Path
 
-__version__ = '0.6.0'
+__version__ = '0.6.1'
 
 OK, DONE, WOULD, SKIP, WARN, FAIL, YOU = 'ok', 'done', 'would', 'skip', 'warn', 'fail', 'you'
 
@@ -1020,6 +1020,22 @@ class Init:
         self.note(YOU, 'launcher', 'for a home-screen button and the Android settings: mobilize android')
         return True
 
+    def step_icon(self):
+        """The widget's icon: tw-web's menu logo, where Termux:Widget looks (icons/<script>.png)."""
+        if not self.web or not is_termux():
+            self.note(SKIP, 'icon', 'Termux only' if self.web else '--no-web')
+            return True
+        icon, logo = Path.home() / '.shortcuts' / 'icons' / 'tw-web.png', web_dir() / 'tw-logo.png'
+        if icon.exists():
+            self.note(OK, 'icon', f'{icon}')
+            return True
+        if not logo.exists():
+            self.note(SKIP, 'icon', f'no {logo} to use')
+            return True
+        self.act('icon', f"{icon} (tw-web's logo; re-add the widget to see it)",
+                 lambda: (icon.parent.mkdir(parents=True, exist_ok=True), shutil.copyfile(logo, icon)))
+        return True
+
     def step_autostart(self):
         if not self.web or not is_termux():
             self.note(SKIP, 'autostart', 'Termux only' if self.web else '--no-web')
@@ -1044,7 +1060,7 @@ class Init:
         steps = [self.step_identity, self.step_packages, self.step_task, self.step_key, self.step_clone,
                  self.step_push, self.step_git_identity, self.step_merge_driver, self.step_taskrc, self.step_local_rc, self.step_state_files, self.step_hooks, self.step_path,
                  self.step_mobilize_rc, self.step_commit, self.step_web, self.step_launcher,
-                 self.step_autostart]
+                 self.step_icon, self.step_autostart]
         self.out(f'mobilize init{" (dry run: nothing changes)" if self.dry else ""}')
         for step in steps:
             try:
@@ -1458,6 +1474,10 @@ def android_steps(info, packages, up):
             'Android 14+: Developer options → Disable child process restrictions.',
             'Android 12–13: from a computer with adb:',
             '  adb shell device_config put activity_manager max_phantom_processes 2147483647'], [], None))
+    steps.append(('power', 'Power saving mode: off while you rely on tw-web', [
+        "Battery saver stops background apps and cuts their network, whatever the per-app settings say.",
+        'Quick settings (pull down from the top), or Settings → Battery. Turning it back on is fine when',
+        "you don't need tw-web: opening Termux or tapping the widget brings it back."], [], None))
     steps.append(('recents', 'Lock Termux in recent apps', [
         'Open the recent-apps view: the □ button; with gestures, swipe up from the bottom edge',
         'and pause; with the fingerprint-sensor key, swipe across the sensor.',

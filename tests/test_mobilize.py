@@ -428,7 +428,12 @@ def test_init_on_termux_writes_the_autostart_block_and_replaces_an_old_launcher(
     init.dry, init.web, init.worst, init.out = False, True, mobilize.OK, lambda *a: None
     init.note = lambda status, step, detail: None
     init.act = lambda step, detail, fn: (fn(), True)[1]
-    assert init.step_launcher() and init.step_autostart()
+    (web / 'tw-logo.png').write_bytes(b'PNG logo')
+    assert init.step_launcher() and init.step_icon() and init.step_autostart()
+    icon = home / '.shortcuts' / 'icons' / 'tw-web.png'
+    assert icon.read_bytes() == b'PNG logo'
+    icon.write_bytes(b'mine')
+    assert init.step_icon() and icon.read_bytes() == b'mine', 'an icon already there is kept'
     assert shortcut.read_text() == mobilize.launcher_text(web, mobilize.web_python(web))
     assert mobilize.bashrc_autostart((home / '.bashrc').read_text()) == 'current'
     (home / '.task').mkdir(exist_ok=True)
@@ -631,22 +636,22 @@ HUAWEI = {'maker': 'HUAWEI', 'model': 'EML-L09', 'release': '10', 'emui': 'Emoti
 def test_android_steps_for_a_huawei_on_android_10():
     steps = mobilize.android_steps(HUAWEI, {'com.termux'}, False)
     keys = [k for k, *_ in steps]
-    assert keys == ['background', 'recents', 'widget', 'overlay', 'try'], 'no phantom killer before 12'
+    assert keys == ['background', 'power', 'recents', 'widget', 'overlay', 'try'], 'no phantom killer before 12'
     _, title, lines, screens, _ = steps[0]
     assert 'App launch' in title and screens == [mobilize.HUAWEI_APP_LAUNCH, mobilize.APP_DETAILS]
     assert any('Manage all automatically" ON' in l for l in lines)
-    assert 'Install Termux:Widget' in steps[2][2][0]
-    assert steps[3][3] == [mobilize.OVERLAY] and steps[-1][4] is False
+    assert 'Install Termux:Widget' in steps[3][2][0]
+    assert steps[4][3] == [mobilize.OVERLAY] and steps[-1][4] is False
 
 
 def test_android_steps_for_a_samsung_on_android_14():
     steps = mobilize.android_steps({'maker': 'samsung', 'model': 'x', 'release': '14', 'emui': ''},
                                    {'com.termux', 'com.termux.widget'}, True)
-    assert [k for k, *_ in steps][:2] == ['background', 'phantom']
+    assert [k for k, *_ in steps][:3] == ['background', 'phantom', 'power']
     assert any('Sleeping apps' in l for l in steps[0][2])
-    assert 'is installed' in steps[3][2][0] and steps[-1][4] is True
+    assert 'is installed' in steps[4][2][0] and steps[-1][4] is True
     unknown = mobilize.android_steps(HUAWEI, None, False)
-    assert 'is installed' in unknown[2][2][0], 'pm could not list: say nothing false'
+    assert 'is installed' in unknown[3][2][0], 'pm could not list: say nothing false'
 
 
 def _android_env(monkeypatch, am_output):
@@ -670,7 +675,7 @@ def test_android_walk_opens_each_screen_and_falls_back_when_one_is_missing(home,
             return 'Error: Activity class {…} does not exist.'
         return 'Starting: Intent { … }'
     calls = _android_env(monkeypatch, am)
-    answers = iter(['', '', '', '', '', '', ''])      # open the screen, then Enter, at each step
+    answers = iter(['', '', '', '', '', '', '', ''])      # open the screen, then Enter, at each step
     out = []
     assert mobilize.android(out=out.append, ask=lambda prompt: next(answers)) == 0
     opened = [c[2:] for c in calls if c[:2] == ['am', 'start']]
