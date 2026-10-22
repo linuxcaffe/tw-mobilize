@@ -29,6 +29,11 @@ Commands
                                   apps' hooks. --all goes back to every hook. No option:
                                   rebuild the folder from local.rc (after a pull brings new
                                   hooks) and list it.
+  mobilize android [--list]       A phone's own settings, which Termux can't change: run
+                                  in the background (Huawei's App launch, battery), lock
+                                  in recent apps, the home-screen button, "Display over
+                                  other apps". Opens each settings screen and waits for
+                                  you; --list just prints the steps for this phone.
   mobilize -e [local]             Edit mobilize.rc (shared by every station), or this
                                   station's local.rc, in $VISUAL / $EDITOR.
   mobilize -h                     This help.
@@ -58,7 +63,7 @@ import sys
 import urllib.request
 from pathlib import Path
 
-__version__ = '0.5.1'
+__version__ = '0.6.0'
 
 OK, DONE, WOULD, SKIP, WARN, FAIL, YOU = 'ok', 'done', 'would', 'skip', 'warn', 'fail', 'you'
 
@@ -915,7 +920,7 @@ class Init:
                 self.note(WARN, 'launcher', f'{path} (edited by hand: left as it is)')
             return True
         self.act('launcher', f'{path} (Termux:Widget, or run it from a shell)', write)
-        self.note(YOU, 'launcher', 'for a home-screen button, install Termux:Widget (F-Droid) and add its widget')
+        self.note(YOU, 'launcher', 'for a home-screen button and the Android settings: mobilize android')
         return True
 
     def step_autostart(self):
@@ -957,8 +962,11 @@ class Init:
             return 0
         self.out('')
         code = check(out=self.out)
+        if is_termux():
+            self.out("\nAndroid's own settings (background running, the home-screen button, "
+                     '"Display over other apps"): mobilize android')
         if self.web and is_termux() and not web_up():
-            self.out('\nStart tw-web: ~/.shortcuts/tw-web (or the Termux:Widget button)')
+            self.out('Start tw-web: ~/.shortcuts/tw-web (or the Termux:Widget button)')
         return max(code, {OK: 0, WARN: 1, FAIL: 2}[self.worst])
 
 
@@ -972,6 +980,32 @@ def _hook_tools(path):
         return []
     return [t for t in ('nb', 'hledger', 'notify-send', 'xdg-open')
             if re.search(r"['\"]%s['\"]" % re.escape(t), text) and not shutil.which(t)]
+
+
+def sshd_settings():
+    """sshd's effective settings (sshd -T), lower-case keys; {} when there's no sshd or it can't say."""
+    if not shutil.which('sshd'):
+        return {}
+    try:
+        r = run(['sshd', '-T'], timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return {}
+    pairs = (line.split(None, 1) for line in r.stdout.splitlines() if ' ' in line)
+    return {k.lower(): v.strip() for k, v in pairs} if r.returncode == 0 else {}
+
+
+def sshd_clash(prefix=None):
+    """termux-services runs sshd (enabled: no `down` file) while another sshd, started by hand,
+    holds the port: the service then fails every second. Returns the hand-started pids."""
+    svc = Path(prefix or os.environ.get('PREFIX', '')) / 'var' / 'service' / 'sshd'
+    if not svc.is_dir() or (svc / 'down').exists():
+        return []
+    try:
+        supervised = (svc / 'supervise' / 'pid').read_text().strip()
+    except OSError:
+        supervised = ''
+    r = run(['pgrep', '-x', 'sshd'])
+    return [pid for pid in r.stdout.split() if pid != supervised] if r.returncode == 0 else []
 
 
 def checks():
@@ -1109,6 +1143,20 @@ def checks():
     else:
         add('tw-web', OK if not is_termux() else WARN, f'not installed at {wd}')
 
+    if is_termux():
+        conf = sshd_settings()
+        if conf:
+            pw = [k for k in ('passwordauthentication', 'kbdinteractiveauthentication') if conf.get(k) == 'yes']
+            if pw:
+                add('sshd', WARN, f"accepts passwords ({', '.join(pw)} yes): make it keys only "
+                                  '(README: "sshd on a phone")')
+            else:
+                add('sshd', OK, 'keys only')
+        hand = sshd_clash()
+        if hand:
+            add('sshd', WARN, f"started by hand (pid {', '.join(hand)}) while termux-services also runs it: "
+                              'the service fails on port 8022. Use one: `sv-disable sshd`, or kill the hand-started one')
+
     dirty = [line[3:] for line in git('status', '--porcelain').stdout.splitlines()
              if line[3:].endswith('.data')]
     if dirty:
@@ -1240,6 +1288,143 @@ def pretest(as_json=False, out=print):
             out(f'  {st:5} {h:<36} {times}  {n}')
     worst = {r[1] for r in rows}
     return 2 if FAIL in worst else 1 if WARN in worst else 0
+
+
+# ── android ───────────────────────────────────────────────────────────────────
+# What mobilize can't do from inside Termux: Android's own settings. Termux may not read
+# them (app ops, battery lists, overlay: all need permissions only adb has), so `mobilize
+# android` walks through them and opens each settings screen with `am start`.
+
+def getprop(name):
+    try:
+        r = run(['getprop', name], timeout=5)
+    except (OSError, subprocess.SubprocessError):
+        return ''
+    return r.stdout.strip() if r.returncode == 0 else ''
+
+
+def android_info():
+    return {'maker': getprop('ro.product.manufacturer'), 'model': getprop('ro.product.model'),
+            'release': getprop('ro.build.version.release'), 'emui': getprop('ro.build.version.emui')}
+
+
+def android_packages():
+    """Installed package names, or None when pm can't list them (Android 11+ may hide some)."""
+    try:
+        r = run(['pm', 'list', 'packages'], timeout=20)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if r.returncode != 0:
+        return None
+    return {line.split(':', 1)[1].strip() for line in r.stdout.splitlines() if line.startswith('package:')}
+
+
+def _major(release):
+    m = re.match(r'(\d+)', release or '')
+    return int(m.group(1)) if m else 0
+
+
+APP_DETAILS = ['-a', 'android.settings.APPLICATION_DETAILS_SETTINGS', '-d', 'package:com.termux']
+HUAWEI_APP_LAUNCH = ['-n', 'com.huawei.systemmanager/.startupmgr.ui.StartupNormalAppListActivity']
+OVERLAY = ['-a', 'android.settings.action.MANAGE_OVERLAY_PERMISSION', '-d', 'package:com.termux']
+
+
+def android_steps(info, packages, up):
+    """The walk: (key, title, lines, screens to try in order, done?) for this phone. done is
+    True/False when mobilize can tell, None when it can't (most of Android's settings)."""
+    maker = (info.get('maker') or '').lower()
+    huawei = maker in ('huawei', 'honor') or bool(info.get('emui'))
+    have = (lambda name: None) if packages is None else (lambda name: name in packages)
+    steps = []
+    if huawei:
+        steps.append(('background', 'Let Termux run in the background (Huawei: App launch)', [
+            'Leave "Manage all automatically" ON: that switch is for every app.',
+            "Switch off Termux's OWN toggle in the list: a \"Manage manually\" dialog appears.",
+            'Turn on Auto-launch, Secondary launch and Run in background, then OK.',
+            'Do the same for Termux:Widget and Termux:API if they are listed.'],
+            [HUAWEI_APP_LAUNCH, APP_DETAILS], None))
+    else:
+        lines = ['Battery: Unrestricted (not "Optimized").']
+        if maker == 'samsung':
+            lines.append('Samsung: keep Termux off "Sleeping apps" and "Deep sleeping apps" '
+                         '(Settings → Battery → Background usage limits).')
+        lines.append('Other makers have their own killers: dontkillmyapp.com')
+        steps.append(('background', 'Let Termux run in the background', lines, [APP_DETAILS], None))
+    if _major(info.get('release')) >= 12:
+        steps.append(('phantom', 'Android 12+: the phantom process killer', [
+            'It stops processes Termux started, tw-web among them.',
+            'Android 14+: Developer options → Disable child process restrictions.',
+            'Android 12–13: from a computer with adb:',
+            '  adb shell device_config put activity_manager max_phantom_processes 2147483647'], [], None))
+    steps.append(('recents', 'Lock Termux in recent apps', [
+        'Open the recent-apps view: the □ button; with gestures, swipe up from the bottom edge',
+        'and pause; with the fingerprint-sensor key, swipe across the sensor.',
+        "Drag Termux's card (its black terminal screen) down until a padlock shows."], [], None))
+    widget = have('com.termux.widget')
+    steps.append(('widget', 'Add the tw-web button to the home screen', [
+        'Install Termux:Widget from F-Droid (same source as Termux).' if widget is False else
+        'Termux:Widget is installed.',
+        'Long-press the home screen → Widgets → Termux:Widget → Termux shortcut → tw-web.'], [], None))
+    steps.append(('overlay', 'Allow "Display over other apps" for Termux', [
+        'A widget tap opens Termux from the background; Android 10+ needs this for that.',
+        'It lets Termux show its window, nothing more. Some phones call it "Floating windows".'],
+        [OVERLAY], None))
+    steps.append(('try', 'Tap the tw-web button', [
+        'It starts tw-web and opens the browser; Termux then says "wake lock held".',
+        'Each start, death and restart is logged in ~/.cache/tw-web/server.out.'], [], up))
+    return steps
+
+
+def open_screen(screens):
+    """Open the first settings screen that exists. am's exit code is 0 even when the activity
+    is missing, so its output decides."""
+    for extra in screens:
+        try:
+            r = run(['am', 'start', *extra], timeout=15)
+        except (OSError, subprocess.SubprocessError):
+            continue
+        said = r.stdout + r.stderr
+        if r.returncode == 0 and 'Error' not in said and 'Exception' not in said:
+            return True
+    return False
+
+
+def android(list_only=False, out=print, ask=input):
+    if not is_termux():
+        out('mobilize android: for a phone, in Termux. Nothing to do here.')
+        return 0
+    info = android_info()
+    steps = android_steps(info, android_packages(), web_up())
+    out(f"mobilize android: {info['maker'] or 'Android'} {info['model']}, Android {info['release'] or '?'}"
+        + (f" ({info['emui']})" if info['emui'] else ''))
+    out("Android's own settings, which Termux can't change or read: you set them, mobilize opens")
+    out('each screen. Menu names differ between phones; README: "The Android side, step by step".')
+    interactive = not list_only and sys.stdin.isatty() and not os.environ.get('TW_NOINTERACT')
+    if not list_only and os.environ.get('TW_NOINTERACT'):
+        print(json.dumps({'type': 'tw_needs_pty', 'cmd': os.environ.get('TW_PREFLIGHT_CMD', ''),
+                          'reason': 'mobilize android opens settings screens and waits for you'}), file=sys.stderr)
+    for n, (key, title, lines, screens, done) in enumerate(steps, 1):
+        mark = {True: ' [done]', False: ' [not yet]', None: ''}[done]
+        out(f'\n{n}. {title}{mark}')
+        for line in lines:
+            out(f'   {line}')
+        if not interactive or done:
+            continue
+        try:
+            if screens:
+                answer = ask('   Open the settings screen? [Y/n/q] ').strip().lower()
+                if answer == 'q':
+                    return 0
+                if answer in ('', 'y', 'yes'):
+                    if not open_screen(screens):
+                        out("   Couldn't open it here: find it in Settings (the README has routes).")
+            if ask('   Enter when done (q to stop) ').strip().lower() == 'q':
+                return 0
+        except (EOFError, KeyboardInterrupt):
+            out('')
+            return 0
+    out('\nAll there is. Run it again any time: `mobilize android` (`--list` just prints).')
+    return 0
 
 
 def check(as_json=False, out=print):
@@ -1393,6 +1578,8 @@ def main(argv=None):
     g = h.add_mutually_exclusive_group()
     g.add_argument('--set', metavar='APPS', help='comma-separated app names (need-priority,gittw,…)')
     g.add_argument('--all', action='store_true', help='every hook again')
+    d = sub.add_parser('android', help="walk through Android's settings for Termux (opens each screen)")
+    d.add_argument('--list', action='store_true', help='just print the steps')
     a = p.parse_args(argv)
     if a.edit:
         return edit(a.edit)
@@ -1402,6 +1589,8 @@ def main(argv=None):
         return show_stations()
     if a.cmd == 'hooks':
         return hooks(a.set, a.all)
+    if a.cmd == 'android':
+        return android(a.list)
     if a.cmd == 'check':
         return pretest(a.json) if a.hooks else check(a.json)
     p.print_help()

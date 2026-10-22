@@ -589,3 +589,104 @@ def test_init_configures_gittws_merge_driver(home, remote, capsys):
     assert 'merge-data' in r.stdout
     assert 'pending.data merge=twdata' in (t / '.gitattributes').read_text()
     assert '.gitattributes' in sh('git', '-C', str(t), 'show', '--stat', '--format=', 'HEAD'), 'committed with the rest'
+
+
+# ── android ───────────────────────────────────────────────────────────────────
+
+HUAWEI = {'maker': 'HUAWEI', 'model': 'EML-L09', 'release': '10', 'emui': 'EmotionUI_10.0.0'}
+
+
+def test_android_steps_for_a_huawei_on_android_10():
+    steps = mobilize.android_steps(HUAWEI, {'com.termux'}, False)
+    keys = [k for k, *_ in steps]
+    assert keys == ['background', 'recents', 'widget', 'overlay', 'try'], 'no phantom killer before 12'
+    _, title, lines, screens, _ = steps[0]
+    assert 'App launch' in title and screens == [mobilize.HUAWEI_APP_LAUNCH, mobilize.APP_DETAILS]
+    assert any('Manage all automatically" ON' in l for l in lines)
+    assert 'Install Termux:Widget' in steps[2][2][0]
+    assert steps[3][3] == [mobilize.OVERLAY] and steps[-1][4] is False
+
+
+def test_android_steps_for_a_samsung_on_android_14():
+    steps = mobilize.android_steps({'maker': 'samsung', 'model': 'x', 'release': '14', 'emui': ''},
+                                   {'com.termux', 'com.termux.widget'}, True)
+    assert [k for k, *_ in steps][:2] == ['background', 'phantom']
+    assert any('Sleeping apps' in l for l in steps[0][2])
+    assert 'is installed' in steps[3][2][0] and steps[-1][4] is True
+    unknown = mobilize.android_steps(HUAWEI, None, False)
+    assert 'is installed' in unknown[2][2][0], 'pm could not list: say nothing false'
+
+
+def _android_env(monkeypatch, am_output):
+    monkeypatch.setenv('TERMUX_VERSION', '0.118')
+    monkeypatch.setattr(mobilize, 'android_info', lambda: HUAWEI)
+    monkeypatch.setattr(mobilize, 'android_packages', lambda: {'com.termux', 'com.termux.widget'})
+    monkeypatch.setattr(mobilize, 'web_up', lambda port=5000: False)
+    monkeypatch.setattr(mobilize.sys.stdin, 'isatty', lambda: True)
+    calls = []
+    def fake_run(argv, env=None, **kw):
+        calls.append(argv)
+        out = am_output(argv) if argv[:2] == ['am', 'start'] else ''
+        return subprocess.CompletedProcess(argv, 0, out, '')
+    monkeypatch.setattr(mobilize, 'run', fake_run)
+    return calls
+
+
+def test_android_walk_opens_each_screen_and_falls_back_when_one_is_missing(home, monkeypatch):
+    def am(argv):
+        if 'com.huawei.systemmanager/.startupmgr.ui.StartupNormalAppListActivity' in argv:
+            return 'Error: Activity class {…} does not exist.'
+        return 'Starting: Intent { … }'
+    calls = _android_env(monkeypatch, am)
+    answers = iter(['', '', '', '', '', '', ''])      # open the screen, then Enter, at each step
+    out = []
+    assert mobilize.android(out=out.append, ask=lambda prompt: next(answers)) == 0
+    opened = [c[2:] for c in calls if c[:2] == ['am', 'start']]
+    assert opened == [mobilize.HUAWEI_APP_LAUNCH, mobilize.APP_DETAILS, mobilize.OVERLAY]
+    assert 'Android 10 (EmotionUI_10.0.0)' in out[0]
+
+
+def test_android_walk_stops_on_q_and_list_asks_nothing(home, monkeypatch):
+    calls = _android_env(monkeypatch, lambda argv: 'Starting')
+    assert mobilize.android(out=lambda *a: None, ask=lambda prompt: 'q') == 0
+    assert not [c for c in calls if c[:2] == ['am', 'start']]
+    out = []
+    assert mobilize.android(list_only=True, out=out.append,
+                            ask=lambda prompt: pytest.fail('--list asked')) == 0
+    assert any('Display over other apps' in l for l in out)
+
+
+def test_android_off_termux_does_nothing(home, capsys):
+    assert mobilize.android(ask=lambda prompt: pytest.fail('asked')) == 0
+    assert 'Nothing to do here' in capsys.readouterr().out
+
+
+# ── sshd ──────────────────────────────────────────────────────────────────────
+
+def test_sshd_settings_and_the_check(home, remote, monkeypatch):
+    init('--data', remote())
+    monkeypatch.setenv('TERMUX_VERSION', '0.118')
+    monkeypatch.setattr(mobilize, 'sshd_clash', lambda prefix=None: [])
+    monkeypatch.setattr(mobilize.shutil, 'which', lambda name, *a, **k: '/x/' + name)
+    real_run = mobilize.run
+    conf = {'text': 'port 8022\npasswordauthentication yes\nkbdinteractiveauthentication no\n'}
+    monkeypatch.setattr(mobilize, 'run', lambda argv, env=None, **kw: (
+        subprocess.CompletedProcess(argv, 0, conf['text'], '') if argv[:2] == ['sshd', '-T']
+        else real_run(argv, env, **kw)))
+    assert mobilize.sshd_settings()['passwordauthentication'] == 'yes'
+    rows = [r for r in mobilize.checks() if r[0] == 'sshd']
+    assert rows == [('sshd', mobilize.WARN, rows[0][2])] and 'passwordauthentication yes' in rows[0][2]
+    conf['text'] = 'passwordauthentication no\nkbdinteractiveauthentication no\n'
+    assert [r for r in mobilize.checks() if r[0] == 'sshd'] == [('sshd', mobilize.OK, 'keys only')]
+
+
+def test_sshd_clash_finds_a_hand_started_sshd_beside_the_service(tmp_path, monkeypatch):
+    svc = tmp_path / 'var' / 'service' / 'sshd'
+    (svc / 'supervise').mkdir(parents=True)
+    (svc / 'supervise' / 'pid').write_text('10\n')
+    monkeypatch.setattr(mobilize, 'run', lambda argv, env=None, **kw:
+                        subprocess.CompletedProcess(argv, 0, '10\n11\n', ''))
+    assert mobilize.sshd_clash(tmp_path) == ['11']
+    (svc / 'down').write_text('')
+    assert mobilize.sshd_clash(tmp_path) == [], 'service off (down file): a hand-started sshd is fine'
+    assert mobilize.sshd_clash(tmp_path / 'nowhere') == []

@@ -26,8 +26,8 @@ that's Termux, not mobilize. Run `termux-change-repo` (pick a mirror group near 
 `pkg upgrade`, then the three lines again. Termux is a rolling release: a long-unused install needs
 upgrading before it installs anything.
 
-**Status: 0.5.1, testing.** `mobilize init`, `check`, `stations` and `-e` work and are tested (pytest, in
-a fake home folder). `check --hooks` (the hook pre-test) since 0.2.0; `hooks` (each station's chosen hooks) since 0.3.0; since 0.5.0 the Termux launcher restarts tw-web when it dies, and opening Termux starts it. This
+**Status: 0.6.0, testing.** `mobilize init`, `check`, `stations` and `-e` work and are tested (pytest, in
+a fake home folder). `check --hooks` (the hook pre-test) since 0.2.0; `hooks` (each station's chosen hooks) since 0.3.0; since 0.5.0 the Termux launcher restarts tw-web when it dies, and opening Termux starts it; since 0.6.0 `mobilize android` walks through the phone's own settings. This
 README also keeps what was learned setting up the first phone by hand (2026-10-21).
 
 ## TL;DR
@@ -85,6 +85,12 @@ the autostart block.
 
 ## The Android side, step by step (you)
 
+**`mobilize android`** walks through these on the phone: for each step it says what to set,
+offers to open the settings screen (`am start`), and waits for you; `--list` just prints the
+steps for this phone. It can't check them for you: Termux may not read Android's battery, app
+launch or overlay settings (that takes adb). It does see whether Termux:Widget is installed and
+whether tw-web answers.
+
 What mobilize can't do from inside Termux. Worked out on `s5` (Huawei P20, EMUI, Android 10),
 2026-10-22; menu names differ between makers and versions, so the generic route comes first.
 
@@ -132,7 +138,8 @@ sshd -t && pkill -HUP -x sshd      # reload the running one in place
 ```
 
 Check from another machine: `ssh -v -o PubkeyAuthentication=no <phone> true` must list only
-`publickey`. It dies with Termux like everything else; start it again with `sshd`. If you use
+`publickey`. `mobilize check` on the phone warns while sshd accepts passwords, and when a
+hand-started sshd and the termux-services one are both set to run. It dies with Termux like everything else; start it again with `sshd`. If you use
 termux-services (`sv-enable sshd`) instead, don't also start it by hand: the hand-started one
 holds port 8022 and the service fails every second ("Address already in use"), and in an ssh
 command `sv` needs `SVDIR=$PREFIX/var/service`.
@@ -319,9 +326,9 @@ remote is an argument, so the repo can be public.
 | Gitignored include targets | yes, created empty |
 | `PATH` in `~/.bashrc` | yes, once |
 | tw-web | yes: clone, `pip install` (asks before installing `clang`) |
+| Android's own settings (background running, recents lock, widget, overlay) | **you**, with `mobilize android` opening each screen; `init` ends by pointing at it |
 | Launcher | yes: a Termux:Widget shortcut in `~/.shortcuts/` that restarts tw-web when it dies (the widget app itself is **you**, from F-Droid); an unedited older launcher is replaced |
 | Autostart | yes: a marked block in `~/.bashrc`, so opening Termux starts tw-web (`mobilize.web.autostart = no` leaves it out) |
-| Battery "Unrestricted", phantom process killer | **you** (see "Keeping tw-web running on Android") |
 | Install tw-web as a browser app | **you**: it opens `http://localhost:5000` with `termux-open-url` |
 | Commit the shared files it changed (`mobilize.rc`, its include), together; never push | yes |
 | Final `check` | yes |
@@ -329,7 +336,7 @@ remote is an argument, so the repo can be public.
 **`check`** (also on its own, any time, any station): `task` is 2.6.2; every include resolves; no
 `/home/<user>` in rc files; `local.rc` names the station; push URLs cover the fetch URL; no dangling
 symlinks or orphan gitlinks; each hook in this station's set has its interpreter and the tools it calls
-(`nb`, `hledger`); the merge driver is configured. **`check --hooks`** runs each hook against a throwaway database
+(`nb`, `hledger`); the merge driver is configured; on Termux, the launcher is current, `~/.bashrc` has the autostart block, and sshd is keys only with no port clash. **`check --hooks`** runs each hook against a throwaway database
 with sample input and times it: the pre-test that decides which hooks are `mobile`.
 
 **Same tool on Linux:** `init` skips the Termux-only steps (pkg, deb, widget) when it isn't in Termux, so
