@@ -7,8 +7,9 @@ Set up a new Taskwarrior 2.6.2 station (an Android phone in Termux, or another L
 existing [gittw](https://github.com/linuxcaffe/gittw) repo, with [tw-web](https://github.com/linuxcaffe/tw-web)
 running on it, and check that it stays set up.
 
-**Status: design and field notes. No code yet.** This README holds what was learned by setting up the
-first phone by hand (2026-10-21), so the tool can be written from it. Decisions and progress live in the
+**Status: 0.1.0, not published yet.** `mobilize init`, `check`, `stations` and `-e` work and are tested
+(pytest, in a fake home folder). Still planned: `check --hooks` (the hook pre-test) and hook sets per
+platform. This README also keeps what was learned setting up the first phone by hand (2026-10-21). Decisions and progress live in the
 plan: `tw:docs/tw-web-android-plan.md`.
 
 ## TL;DR
@@ -22,7 +23,10 @@ plan: `tw:docs/tw-web-android-plan.md`.
   ends with `include ~/.task/local.rc`. `local.rc` is untracked and holds what this station is.
 - **Each hook says which platforms it suits** (`# tw-platforms: desktop mobile`); a station runs the hooks
   marked for it, via 2.6.2's `hooks.location` (planned).
-- `tw-mobilize init` does the setup, `tw-mobilize check` finds what has drifted (planned).
+- `mobilize init` does the setup, `mobilize check` finds what has drifted, `mobilize -e` edits
+  `mobilize.rc` (`-e local`: this station's `local.rc`).
+- **Taskwarrior 3.x gets a loud warning, not a refusal:** nothing here is tested with it, but nothing
+  stops you.
 
 ## The pieces on a station
 
@@ -163,7 +167,7 @@ everyone's path.
 | Kind | Termux | Linux station |
 |---|---|---|
 | Bootstrap | `python git openssh` (one `pkg install` line) | `git`, `python3`: checked, not installed (that needs sudo) |
-| Taskwarrior 2.6.2 | the task2 deb, sha256 checked; refuses if 3.x is installed | the distro's; refuses if it isn't 2.6.x |
+| Taskwarrior 2.6.2 | the task2 deb, sha256 checked; 3.x installed: loud warning | the distro's; 3.x: loud warning |
 | tw-web's Python packages | `pip install -r requirements.txt` (no compiler needed on `s5`; `clang` only if a build fails) | in a venv: newer Debian/Ubuntu refuse a system-wide `pip install` |
 | Opening URLs and files | `termux-open-url`, `termux-open` (`termux-tools`, part of Termux) | `xdg-open` |
 | Apps you install | Termux (F-Droid), optionally Termux:Widget, a browser | none |
@@ -173,7 +177,7 @@ everyone's path.
 stations (it gives live status and the direct route their addresses, but it's one more list to keep up);
 tw-web over https by default.
 
-## Semi-automating it: `curl` → `tw-mobilize init`
+## Semi-automating it: `curl` → `mobilize init`
 
 Almost all of the above can be one command. The parts that can't are the ones that need you: putting a
 key on a website, installing the app in the browser.
@@ -182,8 +186,8 @@ key on a website, installing the app in the browser.
 
 ```bash
 pkg install python git openssh
-curl -fLO https://raw.githubusercontent.com/linuxcaffe/tw-mobilize/main/tw-mobilize
-python tw-mobilize init --station s5 --platform mobile --data <your gittw fetch URL>
+curl -fLO https://raw.githubusercontent.com/linuxcaffe/tw-mobilize/main/mobilize.py
+python mobilize.py init --station s5 --platform mobile --data <your gittw fetch URL>
 ```
 
 **Shape of the tool:** one Python file, standard library only (it runs before anything else is
@@ -194,7 +198,7 @@ remote is an argument, so the repo can be public.
 | `init` step | Automatic? |
 |---|---|
 | Termux packages (`python git openssh`) | yes (`pkg install`), once the bootstrap has python |
-| Taskwarrior 2.6.2 | yes: fetch the gittw deb, check its pinned sha256, `dpkg -i`, refuse if `task` reports 3.x |
+| Taskwarrior 2.6.2 | yes: fetch the gittw deb, check its pinned sha256, `dpkg -i`; a 3.x already installed gets a loud warning |
 | SSH key | yes, if there is none |
 | Key on GitHub / Codeberg | **you**: it prints the key and the `gh ssh-key add` line for another station, then waits for `ssh -T` to succeed |
 | Clone `~/.task`, set push URLs | yes (push URLs taken from `--push`, or asked) |
@@ -205,6 +209,7 @@ remote is an argument, so the repo can be public.
 | tw-web | yes: clone, `pip install` (asks before installing `clang`) |
 | Launcher | yes: a Termux:Widget shortcut in `~/.shortcuts/` (the widget app itself is **you**, from F-Droid) |
 | Install tw-web as a browser app | **you**: it opens `http://localhost:5000` with `termux-open-url` |
+| Commit the shared files it changed (`mobilize.rc`, its include), together; never push | yes |
 | Final `check` | yes |
 
 **`check`** (also on its own, any time, any station): `task` is 2.6.2; every include resolves; no
