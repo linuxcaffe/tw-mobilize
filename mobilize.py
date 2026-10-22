@@ -58,7 +58,7 @@ import sys
 import urllib.request
 from pathlib import Path
 
-__version__ = '0.5.0'
+__version__ = '0.5.1'
 
 OK, DONE, WOULD, SKIP, WARN, FAIL, YOU = 'ok', 'done', 'would', 'skip', 'warn', 'fail', 'you'
 
@@ -444,6 +444,13 @@ if ! curl -s -o /dev/null http://127.0.0.1:{port}/; then
 fi
 termux-open-url http://localhost:{port}/
 """
+
+
+def is_old_launcher(text, d):
+    """True when text is a launcher mobilize 0.1.0–0.4.0 wrote for tw-web in d, whichever Python it named."""
+    marker = '\x00PY\x00'
+    pattern = re.escape(_launcher_text_0_4(d, marker)).replace(re.escape(marker), r'\S+')
+    return re.fullmatch(pattern, text) is not None
 
 
 AUTOSTART_BEGIN = '# >>> mobilize: tw-web autostart >>>'
@@ -902,7 +909,7 @@ class Init:
             have = path.read_text()
             if have == text:
                 self.note(OK, 'launcher', f'{path}')
-            elif have == _launcher_text_0_4(d, web_python(d)):
+            elif is_old_launcher(have, d):
                 self.act('launcher', f'{path}: the newer launcher (restarts tw-web when it dies)', write)
             else:
                 self.note(WARN, 'launcher', f'{path} (edited by hand: left as it is)')
@@ -1090,7 +1097,7 @@ def checks():
             launcher = Path.home() / '.shortcuts' / 'tw-web'
             if not launcher.exists():
                 add('launcher', WARN, f'no {launcher}: mobilize init writes it')
-            elif launcher.read_text() == _launcher_text_0_4(wd, web_python(wd)):
+            elif is_old_launcher(launcher.read_text(), wd):
                 add('launcher', WARN, f'{launcher} is the old one (no restart when tw-web dies): mobilize init')
             try:
                 state = bashrc_autostart((Path.home() / '.bashrc').read_text())

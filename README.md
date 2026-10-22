@@ -26,7 +26,7 @@ that's Termux, not mobilize. Run `termux-change-repo` (pick a mirror group near 
 `pkg upgrade`, then the three lines again. Termux is a rolling release: a long-unused install needs
 upgrading before it installs anything.
 
-**Status: 0.5.0, testing.** `mobilize init`, `check`, `stations` and `-e` work and are tested (pytest, in
+**Status: 0.5.1, testing.** `mobilize init`, `check`, `stations` and `-e` work and are tested (pytest, in
 a fake home folder). `check --hooks` (the hook pre-test) since 0.2.0; `hooks` (each station's chosen hooks) since 0.3.0; since 0.5.0 the Termux launcher restarts tw-web when it dies, and opening Termux starts it. This
 README also keeps what was learned setting up the first phone by hand (2026-10-21).
 
@@ -84,8 +84,11 @@ Three things help; mobilize does the first two.
      started. On Android 14 and later: Developer options → **Disable child process
      restrictions**. On 12–13 it takes adb from a computer:
      `adb shell device_config put activity_manager max_phantom_processes 2147483647`.
-   - Some makers (Samsung among them) add their own app-sleeping lists: keep Termux off
-     "Sleeping apps" / "Deep sleeping apps".
+   - Some makers add their own app killers, and these matter most on Android 10 and
+     earlier. **Huawei** (EMUI; `s5` is a P20 on Android 10): Settings → Battery → App launch →
+     Termux: turn off "Manage automatically", then allow auto-launch, secondary launch and run
+     in background; also lock Termux in the recent-apps view (pull its card down). **Samsung**:
+     keep Termux off "Sleeping apps" / "Deep sleeping apps". Others: dontkillmyapp.com.
 
 `mobilize check` warns when the launcher is the old one (no restart loop) or `~/.bashrc` lacks
 the autostart block.

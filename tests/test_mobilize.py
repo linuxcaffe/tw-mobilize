@@ -365,6 +365,13 @@ def test_launcher_without_start_opens_the_browser(launcher):
     assert f'termux-open-url http://localhost:{launcher.port}/' in launcher.termux.read_text()
 
 
+def test_an_old_launcher_is_recognised_whichever_python_it_named():
+    d = Path('/x/tw-web')
+    assert mobilize.is_old_launcher(mobilize._launcher_text_0_4(d, '/usr/bin/python'), d)
+    assert not mobilize.is_old_launcher(mobilize._launcher_text_0_4(d, '/usr/bin/python') + 'echo mine\n', d)
+    assert not mobilize.is_old_launcher(mobilize.launcher_text(d, '/usr/bin/python'), d)
+
+
 def test_autostart_block_is_added_once_and_rewritten_in_place():
     text = 'export PATH=x\n'
     once = mobilize.with_autostart(text)
@@ -383,7 +390,7 @@ def test_init_on_termux_writes_the_autostart_block_and_replaces_an_old_launcher(
     (web / 'app.py').write_text('')
     shortcut = home / '.shortcuts' / 'tw-web'
     shortcut.parent.mkdir()
-    shortcut.write_text(mobilize._launcher_text_0_4(web, mobilize.web_python(web)))
+    shortcut.write_text(mobilize._launcher_text_0_4(web, '/data/data/com.termux/files/usr/bin/python'))  # not python3
     monkeypatch.setattr(mobilize, 'web_dir', lambda s=None: web)
     init = mobilize.Init.__new__(mobilize.Init)
     init.dry, init.web, init.worst, init.out = False, True, mobilize.OK, lambda *a: None
