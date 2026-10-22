@@ -78,20 +78,64 @@ Three things help; mobilize does the first two.
    Termux (or ssh into it) brings tw-web back. It takes the wake lock only when it starts the
    server, not in every shell. Don't want it: `mobilize.web.autostart = no` in `local.rc`, then
    delete the block (between the `>>> mobilize: tw-web autostart >>>` lines).
-3. **Tell Android to leave Termux alone (you):**
-   - Settings → Apps → Termux → Battery: **Unrestricted** (not "Optimized").
-   - Android 12 and later also have a "phantom process killer" that stops processes Termux
-     started. On Android 14 and later: Developer options → **Disable child process
-     restrictions**. On 12–13 it takes adb from a computer:
-     `adb shell device_config put activity_manager max_phantom_processes 2147483647`.
-   - Some makers add their own app killers, and these matter most on Android 10 and
-     earlier. **Huawei** (EMUI; `s5` is a P20 on Android 10): Settings → Battery → App launch →
-     Termux: turn off "Manage automatically", then allow auto-launch, secondary launch and run
-     in background; also lock Termux in the recent-apps view (pull its card down). **Samsung**:
-     keep Termux off "Sleeping apps" / "Deep sleeping apps". Others: dontkillmyapp.com.
+3. **Tell Android to leave Termux alone (you):** the next section, step by step.
 
 `mobilize check` warns when the launcher is the old one (no restart loop) or `~/.bashrc` lacks
 the autostart block.
+
+## The Android side, step by step (you)
+
+What mobilize can't do from inside Termux. Worked out on `s5` (Huawei P20, EMUI, Android 10),
+2026-10-22; menu names differ between makers and versions, so the generic route comes first.
+
+1. **Let Termux run in the background.**
+   - Most phones: Settings → Apps → Termux → Battery: **Unrestricted** (not "Optimized").
+   - **Huawei (EMUI):** Settings → Battery → **App launch**. Leave **"Manage all
+     automatically" on** (that switch is for every app; off, they all run unchecked). Instead
+     switch off **Termux's own** toggle in the list: a "Manage manually" dialog appears with
+     **Auto-launch, Secondary launch, Run in background**; turn all three on. Do the same for
+     Termux:Widget and Termux:API if installed. The three switches only exist in that dialog.
+   - **Samsung:** keep Termux off "Sleeping apps" / "Deep sleeping apps".
+   - **Android 12 and later**, any maker: the "phantom process killer" stops processes Termux
+     started. Android 14+: Developer options → **Disable child process restrictions**; 12–13:
+     `adb shell device_config put activity_manager max_phantom_processes 2147483647` from a computer.
+   - Other makers: dontkillmyapp.com.
+2. **Lock Termux in recent apps** (Huawei and others that clear it): open Termux, open the
+   recent-apps view (the □ button; with gestures, swipe up from the bottom edge and pause; with
+   the fingerprint-sensor navigation key, swipe across the sensor), and drag Termux's card (the
+   preview of its black terminal screen) down until a padlock shows.
+3. **Add the widget:** install Termux:Widget (F-Droid, same source as Termux). Long-press the
+   home screen → Widgets → Termux:Widget → **Termux shortcut** → `tw-web` (or the list widget,
+   which shows everything in `~/.shortcuts`; tap its refresh icon if it's empty).
+4. **Allow "Display over other apps" for Termux** (Android 10+): Termux asks the first time the
+   widget runs, because a widget tap opens a Termux session from the background. EMUI hides the
+   setting (Settings search finds nothing); open it straight from Termux:
+
+   ```
+   am start -a android.settings.action.MANAGE_OVERLAY_PERMISSION -d package:com.termux
+   ```
+
+   It lets Termux show its window, nothing more.
+5. **Tap the widget.** It starts tw-web and opens the browser; Termux's notification then says
+   "wake lock held". `~/.cache/tw-web/server.out` logs each start, death and restart
+   (`mobilize:` lines).
+
+## sshd on a phone: a development aid
+
+Nothing in the scheme needs it: stations never talk to each other, only to the git remotes
+(over ssh *out*, with the station's own key). `sshd` (port 8022) is how another machine works on
+the phone: running `mobilize init`, reading logs. Keep it or not; if kept, **keys only**:
+
+```
+printf '\nPasswordAuthentication no\nKbdInteractiveAuthentication no\n' >> $PREFIX/etc/ssh/sshd_config
+sshd -t && pkill -HUP -x sshd      # reload the running one in place
+```
+
+Check from another machine: `ssh -v -o PubkeyAuthentication=no <phone> true` must list only
+`publickey`. It dies with Termux like everything else; start it again with `sshd`. If you use
+termux-services (`sv-enable sshd`) instead, don't also start it by hand: the hand-started one
+holds port 8022 and the service fails every second ("Address already in use"), and in an ssh
+command `sv` needs `SVDIR=$PREFIX/var/service`.
 
 ## Setting up a phone by hand (what worked, 2026-10-21)
 
@@ -157,6 +201,12 @@ On `s5` (2026-10-21) tw-web installed with no compiler (Python 3.13, Werkzeug 3.
 
 | Fewer contexts in tw-web on `s5` (`need`, `tod`) | both are written by hooks: `context.need.read` in `need.rc` (tracked, but the hook rewrites it; the committed copy is blank) and `context.tod.read` in `tod.rc` (gitignored). With `hooks=off` nothing fills them | expected until the station runs those hooks; `check` lists contexts that are empty |
 | tw-web: "Network error: Failed to fetch", no contexts | Android stopped Termux, so the server died (its log ends 13:42); the page itself came from the service worker's cache | 0.5.0: the launcher runs it in a restart loop with the wake lock, and `~/.bashrc` starts it when Termux opens (see "Keeping tw-web running on Android"); battery "Unrestricted" is you. It happened again in the offline test of 2026-10-22, after ~10 minutes; sshd died with it. tw-web is to say "the tw-web server isn't answering" instead |
+| s5's 0.4.0 launcher kept as "edited by hand" | it named `…/bin/python` (the bootstrap's interpreter); init now computes `python3` | 0.5.1 recognises an old launcher whichever Python it names |
+| Huawei: the App launch switches weren't there | they appear only in the dialog when one app is set to manual; the top "Manage all automatically" switch sets every app to manual | "The Android side, step by step" |
+| The widget needs "Display over other apps", and EMUI's Settings search can't find it | Android 10+ blocks background activity starts; a widget tap is one | `am start … MANAGE_OVERLAY_PERMISSION -d package:com.termux` opens it (step 4) |
+| Termux:API app installed, `termux-job-scheduler` missing | the app and its command-line package (`pkg install termux-api`) are separate | needed for scheduled sync (planned) |
+| sshd on s5 accepted passwords | Termux's default | keys only since 2026-10-22 (section above); a `sv restart` from ssh failed (`SVDIR`) and then fought the hand-started sshd for the port |
+| **Widget → tw-web, 2026-10-22 12:59:** restart loop + server up, tasks intact | | the offline test follows |
 
 | **Hook pre-test, 2026-10-22** (`mobilize check --hooks`, 25 hooks): `yoga` +0.33 s on a read with all hooks, `s5` **+4.3 s on a read and +33 s over five commands**: each Python hook costs ~0.05 s on the laptop, 0.4–0.75 s on the phone (Python start-up) | the phone needs a small hook set; tw-web's reads already run with hooks off, but every write fires the on-launch, on-add/modify and on-exit chains | choose the `mobile` set by these numbers |
 | `on-modify_hledger-add.py` fails every `done` in the sandbox | it checks `TW_NOINTERACT` *before* whether the task is a transaction, so under tw-web (which sets it) every completion is refused with `tw_needs_pty` | a bug in tw-hledger-add-hook (since 2026-07-11): check the trigger first |
