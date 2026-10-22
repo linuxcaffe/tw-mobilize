@@ -908,6 +908,7 @@ def _sandbox(root):
     env = dict(os.environ, HOME=str(home), TW_TASK_DIR=str(t), TASKRC=str(t / '.taskrc'),
                LEDGER_FILE=str(root / 'sandbox.journal'), NB_DIR=str(root / 'nb'),
                TW_SPOOL_DIR=str(root / 'spool'), TW_NOINTERACT='1', TW_CLIENT='mobilize-pretest',
+               PYTHONDONTWRITEBYTECODE='1',   # scripts/ is linked, not copied: no __pycache__ in the real one
                GIT_CEILING_DIRECTORIES=str(root))
     return t, env
 

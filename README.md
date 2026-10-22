@@ -26,8 +26,8 @@ that's Termux, not mobilize. Run `termux-change-repo` (pick a mirror group near 
 `pkg upgrade`, then the three lines again. Termux is a rolling release: a long-unused install needs
 upgrading before it installs anything.
 
-**Status: 0.1.0, testing.** `mobilize init`, `check`, `stations` and `-e` work and are tested (pytest, in
-a fake home folder). Still planned: `check --hooks` (the hook pre-test) and hook sets per platform. This
+**Status: 0.2.0, testing.** `mobilize init`, `check`, `stations` and `-e` work and are tested (pytest, in
+a fake home folder). `check --hooks` (the hook pre-test) since 0.2.0. Still planned: hook sets per platform. This
 README also keeps what was learned setting up the first phone by hand (2026-10-21).
 
 ## TL;DR
@@ -120,6 +120,11 @@ On `s5` (2026-10-21) tw-web installed with no compiler (Python 3.13, Werkzeug 3.
 
 | Fewer contexts in tw-web on `s5` (`need`, `tod`) | both are written by hooks: `context.need.read` in `need.rc` (tracked, but the hook rewrites it; the committed copy is blank) and `context.tod.read` in `tod.rc` (gitignored). With `hooks=off` nothing fills them | expected until the station runs those hooks; `check` lists contexts that are empty |
 | tw-web: "Network error: Failed to fetch", no contexts | Android stopped Termux, so the server died (its log ends 13:42); the page itself came from the service worker's cache | `termux-wake-lock`, Termux set to "unrestricted" battery use, and a launcher that starts the server if it's down. tw-web could say "the tw-web server isn't running" instead |
+
+| **Hook pre-test, 2026-10-22** (`mobilize check --hooks`, 25 hooks): `yoga` +0.33 s on a read with all hooks, `s5` **+4.3 s on a read and +33 s over five commands**: each Python hook costs ~0.05 s on the laptop, 0.4–0.75 s on the phone (Python start-up) | the phone needs a small hook set; tw-web's reads already run with hooks off, but every write fires the on-launch, on-add/modify and on-exit chains | choose the `mobile` set by these numbers |
+| `on-modify_hledger-add.py` fails every `done` in the sandbox | it checks `TW_NOINTERACT` *before* whether the task is a transaction, so under tw-web (which sets it) every completion is refused with `tw_needs_pty` | a bug in tw-hledger-add-hook (since 2026-07-11): check the trigger first |
+| `on-modify_tw2nb.py` fails on `s5` | calls `/usr/local/bin/nb` by absolute path | desktop-only (no nb on the phone) |
+| The pre-test left `__pycache__/*.pyc` in the real `scripts/` | `scripts/` is linked into the sandbox, not copied | `PYTHONDONTWRITEBYTECODE=1` in the sandbox; `~/.task` now ignores `__pycache__/` and stopped tracking two (`yoga`, 2026-10-22) |
 
 What carried over without trouble: exec bits (git keeps them), `#!/usr/bin/env python3` shebangs, every
 hook's `~/.task` lookup (`Path.home()`, never a hard-coded home), tw-web's runtime folder (no

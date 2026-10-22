@@ -342,6 +342,7 @@ def test_pretest_sandbox_points_real_home_paths_inside_it(station, tmp_path):
     assert env['HOME'] == str(tmp_path / 'sb' / 'home') and env['TASKRC'] == str(t / '.taskrc')
     assert f'confidential.path={tmp_path}/sb/home/.task/config' in (t / '.taskrc').read_text()
     assert (t / 'scripts').is_symlink(), 'big read-only folders are linked, not copied'
+    assert env['PYTHONDONTWRITEBYTECODE'] == '1', 'so a hook importing from scripts/ leaves no __pycache__ there'
 
 
 def test_check_hooks_cli(station, capsys):
