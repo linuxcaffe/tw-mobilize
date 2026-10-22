@@ -8,6 +8,7 @@ import socket
 import subprocess
 import sys
 import time
+import shutil
 from types import SimpleNamespace
 from pathlib import Path
 
@@ -303,8 +304,15 @@ def _wait(cond, secs=10):
     return False
 
 
+# Any real shared library: the launcher's LD_PRELOAD must point at a loadable one.
+LIBC_STANDIN = next((p for p in ('/lib/x86_64-linux-gnu/libm.so.6', '/lib/aarch64-linux-gnu/libm.so.6',
+                                 '/usr/lib/libm.so.6', '/lib64/libm.so.6') if os.path.exists(p)), None)
+
+
 @pytest.fixture
 def launcher(tmp_path):
+    if not LIBC_STANDIN:
+        pytest.skip('no libm to stand in for termux-exec')
     """The real launcher script, run with sh against a stand-in app.py on a free port."""
     port = _free_port()
     web = tmp_path / 'web'
@@ -317,13 +325,24 @@ def launcher(tmp_path):
     for name in ('termux-wake-lock', 'termux-wake-unlock', 'termux-open-url'):
         (bin_ / name).write_text(f'#!/bin/sh\necho {name} "$@" >> {tmp_path}/termux.log\n')
         (bin_ / name).chmod(0o755)
+    prefix = tmp_path / 'prefix'
+    (prefix / 'lib').mkdir(parents=True)
+    lib = prefix / 'lib' / 'libtermux-exec-ld-preload.so'
+    shutil.copy(LIBC_STANDIN, lib)                   # a real library, so the preload loads quietly
     script = tmp_path / 'tw-web'
-    script.write_text(mobilize.launcher_text(web, sys.executable, port=port))
+    old_prefix, os.environ['PREFIX'] = os.environ.get('PREFIX'), str(prefix)
+    old_task, os.environ['TW_TASK_DIR'] = os.environ.get('TW_TASK_DIR'), str(tmp_path / '.task')
+    try:
+        script.write_text(mobilize.launcher_text(web, sys.executable, port=port))
+    finally:
+        for k, v in (('PREFIX', old_prefix), ('TW_TASK_DIR', old_task)):
+            os.environ.pop(k) if v is None else os.environ.__setitem__(k, v)
     run = tmp_path / 'run'
-    env = dict(os.environ, HOME=str(tmp_path), XDG_RUNTIME_DIR=str(run), PATH=f"{bin_}:{os.environ['PATH']}")
+    env = {k: v for k, v in os.environ.items() if k != 'LD_PRELOAD'}   # bare, as from the widget
+    env.update(HOME=str(tmp_path), XDG_RUNTIME_DIR=str(run), PATH=f"{bin_}:{os.environ['PATH']}")
     paths = SimpleNamespace(script=script, port=port, env=env, pidf=run / 'tw-web' / 'tw-web.pid',
                             loopf=run / 'tw-web' / 'tw-web.loop', log=tmp_path / '.cache' / 'tw-web' / 'server.out',
-                            termux=tmp_path / 'termux.log')
+                            termux=tmp_path / 'termux.log', lib=lib, scripts=tmp_path / '.task' / 'scripts')
     paths.go = lambda *a: subprocess.run(['sh', str(script), *a], env=env, capture_output=True, text=True, timeout=30)
     paths.up = lambda: mobilize.web_up(port)
     yield paths
@@ -346,6 +365,19 @@ def test_launcher_start_runs_the_server_in_a_loop_that_survives_a_crash(launcher
     assert 'starting it again' in launcher.log.read_text()
     launcher.go('--start')                           # already running: no second loop
     assert launcher.log.read_text().count('mobilize: starting tw-web') == 1
+
+
+def test_launcher_gives_a_widget_started_server_termux_exec_and_the_fleet_scripts(launcher):
+    launcher.go('--start')
+    assert _wait(launcher.up)
+    env = mobilize.server_environ(launcher.pidf)
+    assert env['LD_PRELOAD'] == str(launcher.lib), 'else every #!/usr/bin/env hook fails'
+    assert env['PATH'].split(':')[0] == str(launcher.scripts)
+
+
+def test_an_0_5_launcher_is_old_too():
+    d = Path('/x/tw-web')
+    assert mobilize.is_old_launcher(mobilize._launcher_text_0_5(d, '/usr/bin/python3'), d)
 
 
 def test_launcher_loop_does_not_restart_a_server_stopped_on_purpose(launcher):
@@ -690,3 +722,21 @@ def test_sshd_clash_finds_a_hand_started_sshd_beside_the_service(tmp_path, monke
     (svc / 'down').write_text('')
     assert mobilize.sshd_clash(tmp_path) == [], 'service off (down file): a hand-started sshd is fine'
     assert mobilize.sshd_clash(tmp_path / 'nowhere') == []
+
+
+def test_check_warns_when_the_running_server_lacks_termux_exec(home, remote, monkeypatch):
+    init('--data', remote())
+    monkeypatch.setenv('TERMUX_VERSION', '0.118')
+    web = home / 'tw-web'
+    web.mkdir()
+    (web / 'app.py').write_text('')
+    monkeypatch.setattr(mobilize, 'web_dir', lambda s=None: web)
+    monkeypatch.setattr(mobilize, 'web_up', lambda port=5000: True)
+    monkeypatch.setattr(mobilize, 'sshd_settings', lambda: {})
+    monkeypatch.setattr(mobilize, 'sshd_clash', lambda prefix=None: [])
+    (home / '.shortcuts').mkdir()
+    (home / '.shortcuts' / 'tw-web').write_text(mobilize.launcher_text(web, mobilize.web_python(web)))
+    monkeypatch.setattr(mobilize, 'server_environ', lambda pidfile=None: {'PATH': '/usr/bin'})
+    assert any(n == 'tw-web' and s == mobilize.WARN and 'LD_PRELOAD' in d for n, s, d in mobilize.checks())
+    monkeypatch.setattr(mobilize, 'server_environ', lambda pidfile=None: {'LD_PRELOAD': '/p/lib.so'})
+    assert not any('LD_PRELOAD' in d for n, s, d in mobilize.checks())

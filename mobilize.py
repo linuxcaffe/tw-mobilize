@@ -365,6 +365,88 @@ def station_block(station, platform):
 
 def launcher_text(d, py, port=WEB_PORT):
     prefix = os.environ.get('PREFIX', '/data/data/com.termux/files/usr')
+    scripts = task_dir() / 'scripts'
+    return f"""\
+#!{prefix}/bin/sh
+# tw-web: start the server if it isn't running, then open it in the browser.
+# Written by `mobilize init`, which replaces it when a newer mobilize writes it
+# differently (unless you've edited it). Termux:Widget shows it on the home screen.
+#
+#   ~/.shortcuts/tw-web           start tw-web if needed, then open it in the browser
+#   ~/.shortcuts/tw-web --start   start tw-web if needed, nothing else (~/.bashrc runs this)
+#
+# The server runs in a loop that starts it again when it dies: a crash, or Android
+# stopping it. Not when it was stopped on purpose (Settings → Stop server, Ctrl-C, kill),
+# and not after 5 quick failures in a row. Android can also stop the loop itself; then
+# opening Termux starts it again (the block mobilize writes in ~/.bashrc).
+# Server output, and the loop's notes: ~/.cache/tw-web/server.out
+#
+# Started from the widget, it gets a bare environment: no LD_PRELOAD (termux-exec, which makes
+# `#!/usr/bin/env python3` work: without it every hook fails "No such file or directory") and
+# no fleet scripts on PATH (gittw). A Termux session sets both; this sets them when missing.
+if [ -z "$LD_PRELOAD" ]; then
+    for lib in {prefix}/lib/libtermux-exec-ld-preload.so {prefix}/lib/libtermux-exec.so; do
+        if [ -f "$lib" ]; then export LD_PRELOAD="$lib"; break; fi
+    done
+fi
+case ":$PATH:" in *":{scripts}:"*) ;; *) export PATH="{scripts}:$PATH" ;; esac
+port={port}
+run=${{XDG_RUNTIME_DIR:+$XDG_RUNTIME_DIR/tw-web}}
+run=${{run:-$HOME/.cache/tw-web}}
+pidf=$run/tw-web.pid
+loopf=$run/tw-web.loop
+log=$HOME/.cache/tw-web/server.out
+
+up() {{ curl -s -o /dev/null --max-time 2 http://127.0.0.1:$port/; }}
+looping() {{ [ -f "$loopf" ] && kill -0 "$(cat "$loopf")" 2>/dev/null; }}
+note() {{ echo "$(date '+%F %T') mobilize: $*" >> "$log"; }}
+
+if [ "$1" = --loop ]; then
+    echo $$ > "$loopf"
+    cd "{d}" || exit 1
+    fails=0
+    while :; do
+        t0=$(date +%s)
+        "{py}" app.py >> "$log" 2>&1 &
+        echo $! > "$pidf"
+        wait $!
+        code=$?
+        # tw-web's Stop removes the PID file; SIGTERM/SIGINT mean someone stopped it
+        if [ ! -f "$pidf" ] || [ $code -eq 0 ] || [ $code -eq 130 ] || [ $code -eq 143 ]; then
+            note "tw-web stopped (exit $code): not restarting"
+            break
+        fi
+        if [ $(( $(date +%s) - t0 )) -lt 30 ]; then fails=$((fails + 1)); else fails=0; fi
+        if [ $fails -ge 5 ]; then
+            note "tw-web failed 5 times in a row (exit $code): giving up, see above"
+            break
+        fi
+        note "tw-web died (exit $code): starting it again"
+        sleep 2
+    done
+    rm -f "$pidf" "$loopf"
+    termux-wake-unlock 2>/dev/null
+    exit 0
+fi
+
+if ! up && ! looping; then
+    mkdir -p "$run" "${{log%/*}}"
+    termux-wake-lock 2>/dev/null
+    note "starting tw-web"
+    nohup sh "$0" --loop > /dev/null 2>&1 &
+    [ -t 1 ] && echo "tw-web: starting on http://localhost:$port/"
+    [ "$1" = --start ] && exit 0
+    i=0
+    while [ $i -lt 30 ] && ! up; do sleep 0.5; i=$((i + 1)); done
+fi
+[ "$1" = --start ] && exit 0
+termux-open-url http://localhost:$port/
+"""
+
+
+def _launcher_text_0_5(d, py, port=WEB_PORT):
+    """The launcher mobilize 0.5.x wrote (no LD_PRELOAD or PATH of its own)."""
+    prefix = os.environ.get('PREFIX', '/data/data/com.termux/files/usr')
     return f"""\
 #!{prefix}/bin/sh
 # tw-web: start the server if it isn't running, then open it in the browser.
@@ -452,10 +534,25 @@ termux-open-url http://localhost:{port}/
 
 
 def is_old_launcher(text, d):
-    """True when text is a launcher mobilize 0.1.0–0.4.0 wrote for tw-web in d, whichever Python it named."""
+    """True when text is a launcher an older mobilize wrote for tw-web in d, whichever Python it named."""
     marker = '\x00PY\x00'
-    pattern = re.escape(_launcher_text_0_4(d, marker)).replace(re.escape(marker), r'\S+')
-    return re.fullmatch(pattern, text) is not None
+    for older in (_launcher_text_0_4, _launcher_text_0_5):
+        pattern = re.escape(older(d, marker)).replace(re.escape(marker), r'\S+')
+        if re.fullmatch(pattern, text):
+            return True
+    return False
+
+
+def server_environ(pidfile=None):
+    """The running tw-web server's environment (from its PID file), or None."""
+    run_dir = Path(os.environ['XDG_RUNTIME_DIR']) / 'tw-web' if os.environ.get('XDG_RUNTIME_DIR') \
+        else Path.home() / '.cache' / 'tw-web'
+    try:
+        pid = int((pidfile or run_dir / 'tw-web.pid').read_text().strip())
+        raw = Path(f'/proc/{pid}/environ').read_bytes()
+    except (OSError, ValueError):
+        return None
+    return dict(item.split('=', 1) for item in raw.decode(errors='replace').split('\0') if '=' in item)
 
 
 AUTOSTART_BEGIN = '# >>> mobilize: tw-web autostart >>>'
@@ -915,7 +1012,7 @@ class Init:
             if have == text:
                 self.note(OK, 'launcher', f'{path}')
             elif is_old_launcher(have, d):
-                self.act('launcher', f'{path}: the newer launcher (restarts tw-web when it dies)', write)
+                self.act('launcher', f'{path}: the newer launcher', write)
             else:
                 self.note(WARN, 'launcher', f'{path} (edited by hand: left as it is)')
             return True
@@ -1132,7 +1229,12 @@ def checks():
             if not launcher.exists():
                 add('launcher', WARN, f'no {launcher}: mobilize init writes it')
             elif is_old_launcher(launcher.read_text(), wd):
-                add('launcher', WARN, f'{launcher} is the old one (no restart when tw-web dies): mobilize init')
+                add('launcher', WARN, f'{launcher} is an older one: mobilize init replaces it')
+            env = server_environ() if web_up() else None
+            if env is not None and not env.get('LD_PRELOAD'):
+                add('tw-web', WARN, 'the running server has no LD_PRELOAD (termux-exec): every hook fails '
+                                    '"No such file or directory". Stop it (Settings → Stop server) and start '
+                                    'it again with the launcher from mobilize 0.6.0 or later')
             try:
                 state = bashrc_autostart((Path.home() / '.bashrc').read_text())
             except OSError:
