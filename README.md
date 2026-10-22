@@ -102,6 +102,77 @@ hook's `~/.task` lookup (`Path.home()`, never a hard-coded home), tw-web's runti
 `XDG_RUNTIME_DIR` in Termux, so its `~/.cache/tw-web` fallback applies), and the Calendar's holidays and
 moon (they arrive in the clone as `config/holidays.rc` and `sky.rc`).
 
+## In the fleet (planned)
+
+tw-mobilize joins the [awesome-taskwarrior](https://github.com/linuxcaffe/awesome-taskwarrior) registry
+and follows its `CONVENTIONS.md` (§7–9):
+
+- **Install:** `tw -I mobilize` (registry name `mobilize`, repo `tw-mobilize`), like `events`/`tw-events`.
+  The command goes to `~/.task/scripts/`, which is inside the gittw repo, so **every clone already has
+  it**: a new station needs `curl` once; after that it updates with `tw -u`. Docs:
+  `~/.task/docs/mobilize_README.md`.
+- **Settings:** `~/.task/config/mobilize.rc`, keys `mobilize.<setting>`, included from `included.rc`; the
+  tool reads the file directly. The installer doesn't ship it (generated installers overwrite config on
+  every `tw -u`): `mobilize` writes it itself, keeps what's there, and adds the include only after the
+  file exists, as `events init` does.
+- **Tests:** pytest in `tests/`, never touching `~/.task`; `TW_TASK_DIR` respected.
+- **The dangling-include rule,** knowingly bent: the shared `.taskrc` includes the untracked `local.rc`,
+  and `included.rc` includes the gitignored `nag-state.rc` and `tod.rc`. So a bare `git clone` of a gittw
+  repo won't start `task` until `mobilize init` (or `touch`) creates them. `init` is the supported way
+  onto a new station; `taskutil config check` reports a missing one.
+
+## Where settings live
+
+The bootstrap runs before anything exists, so settings come from four places:
+
+| Where | Holds | Why there |
+|---|---|---|
+| **Command-line options** | `--data <fetch URL>`, `--station s5`, `--platform mobile` | needed before the clone exists |
+| **`mobilize.rc`** (tracked, travels with the clone) | the recipe shared by every station: push URLs, the list of stations | written once; each new station reads it |
+| **`local.rc`** (untracked) | this station: `gittw.device`, `tw.platforms`, `hooks.location`, and overrides such as `mobilize.web.dir` | the only part that differs per device |
+| **Built into the tool** | the task2 deb's URL and sha256, Termux package names, tw-web's public repo, tw-web's default folder | facts about the tool, not about you; `mobilize.rc` or `local.rc` can override them |
+
+A sketch of `mobilize.rc` (yours lives in your private gittw repo; nothing private is in the tool):
+
+```
+# mobilize.rc: how to set up a station. Shared; `mobilize init` reads it after cloning.
+mobilize.data.push = git@codeberg.org:<you>/<data>.git, git@github.com:<you>/<data>.git
+mobilize.web.repo  = https://codeberg.org/linuxcaffe/tw-web.git
+mobilize.station.yoga.platform = desktop
+mobilize.station.s5.platform   = mobile
+mobilize.station.s5.ssh        = s5          # Host alias: direct sync route, live status
+```
+
+**tw-web's folder** defaults to `~/.local/share/tw-web`: on most stations it's an installed app. A station
+where tw-web is a development checkout says so in its own `local.rc` (`yoga`:
+`mobilize.web.dir = ~/dev/tw-web`). A shared `~/dev/…` would have been one person's habit made into
+everyone's path.
+
+## What it depends on
+
+**Repos:**
+- **Your gittw data repo:** private, over SSH. The only place the station needs a key.
+- **tw-web:** public, cloned over **https**, so running it needs no key (switch the remote to SSH to push
+  from that station).
+- **tw-mobilize:** public, fetched once by `curl`; afterwards it comes with the clone.
+- **gittw:** hosts the task2 deb. `gittw`, `tw` and the other fleet scripts are already in
+  `~/.task/scripts/`, so no awesome-taskwarrior checkout is needed on a station.
+
+**Packages:**
+
+| Kind | Termux | Linux station |
+|---|---|---|
+| Bootstrap | `python git openssh` (one `pkg install` line) | `git`, `python3`: checked, not installed (that needs sudo) |
+| Taskwarrior 2.6.2 | the task2 deb, sha256 checked; refuses if 3.x is installed | the distro's; refuses if it isn't 2.6.x |
+| tw-web's Python packages | `pip install -r requirements.txt` (no compiler needed on `s5`; `clang` only if a build fails) | in a venv: newer Debian/Ubuntu refuse a system-wide `pip install` |
+| Opening URLs and files | `termux-open-url`, `termux-open` (`termux-tools`, part of Termux) | `xdg-open` |
+| Apps you install | Termux (F-Droid), optionally Termux:Widget, a browser | none |
+| Tools that hooks call (`nb`, `hledger`) | not installed; `check` names the hooks that need them | whatever is there |
+
+**Open (2026-10-22):** command name `mobilize` or `tw-mobilize`; whether `mobilize.rc` keeps a list of
+stations (it gives live status and the direct route their addresses, but it's one more list to keep up);
+tw-web over https by default.
+
 ## Semi-automating it: `curl` → `tw-mobilize init`
 
 Almost all of the above can be one command. The parts that can't are the ones that need you: putting a
