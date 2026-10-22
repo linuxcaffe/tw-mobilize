@@ -359,3 +359,76 @@ def test_check_hooks_cli(station, capsys):
     data = json.loads(capsys.readouterr().out)
     assert code == 2
     assert {d['hook'] for d in data} >= {'on-add_good.sh', '(all together)'}
+
+
+# ── choosing a station's hooks ────────────────────────────────────────────────
+
+def test_hooks_set_builds_the_station_folder_and_writes_local_rc(home, remote, capsys):
+    files = dict(SEED)
+    files.update({'hooks/on-add_need-priority.py': '#!/bin/sh\nread t; echo "$t"\n',
+                  'hooks/on-exit_need-priority.py': '#!/bin/sh\n',
+                  'hooks/on-exit_gittw.py': '#!/bin/sh\n',
+                  'hooks/on-exit_recurrence.py': '#!/bin/sh\n',
+                  'hooks/on-modify_need-priority-extra.py': '#!/bin/sh\n'})
+    files['.gitignore'] += 'hooks.d/\n'
+    init('--data', remote(files))
+    t = home / '.task'
+    assert mobilize.main(['hooks', '--set', 'need-priority,gittw']) == 0
+    folder = t / 'hooks.d' / 't1'
+    assert sorted(p.name for p in folder.iterdir()) == ['on-add_need-priority.py', 'on-exit_gittw.py',
+                                                        'on-exit_need-priority.py']
+    assert os.readlink(folder / 'on-exit_gittw.py') == '../../hooks/on-exit_gittw.py'
+    rc = mobilize.read_rc(t / 'local.rc')
+    assert rc['mobilize.hooks'] == 'need-priority, gittw'
+    assert rc['hooks.location'] == '~/.task/hooks.d/t1' and rc['hooks'] == 'on'
+    r = subprocess.run(['task', '_get', 'rc.hooks.location'], capture_output=True, text=True)
+    assert r.stdout.strip() == str(t / 'hooks.d' / 't1'), 'task reads it (and expands the ~)'
+
+
+def test_hooks_set_again_replaces_lines_and_drops_stale_links(home, remote):
+    files = dict(SEED)
+    files.update({'hooks/on-exit_gittw.py': '#!/bin/sh\n', 'hooks/on-add_time-defaults.py': '#!/bin/sh\n'})
+    init('--data', remote(files))
+    mobilize.main(['hooks', '--set', 'gittw'])
+    mobilize.main(['hooks', '--set', 'time-defaults'])
+    t = home / '.task'
+    assert [p.name for p in (t / 'hooks.d' / 't1').iterdir()] == ['on-add_time-defaults.py']
+    text = (t / 'local.rc').read_text()
+    assert text.count('mobilize.hooks') == 1 and text.count('hooks.location') == 1
+
+
+def test_hooks_all_goes_back_to_every_hook(home, remote):
+    files = dict(SEED)
+    files['hooks/on-exit_gittw.py'] = '#!/bin/sh\n'
+    init('--data', remote(files))
+    mobilize.main(['hooks', '--set', 'gittw'])
+    assert mobilize.main(['hooks', '--all']) == 0
+    rc = mobilize.read_rc(home / '.task' / 'local.rc')
+    assert 'hooks.location' not in rc and 'mobilize.hooks' not in rc
+    assert not (home / '.task' / 'hooks.d').exists() or not list((home / '.task' / 'hooks.d').iterdir())
+
+
+def test_hooks_names_an_app_with_no_hook(home, remote, capsys):
+    init('--data', remote())
+    capsys.readouterr()
+    assert mobilize.main(['hooks', '--set', 'nonesuch']) == 1
+    assert "no hook in" in capsys.readouterr().out
+
+
+def test_check_says_when_the_folder_is_out_of_step(home, remote, capsys):
+    files = dict(SEED)
+    files['hooks/on-exit_gittw.py'] = '#!/bin/sh\n'
+    init('--data', remote(files))
+    mobilize.main(['hooks', '--set', 'gittw'])
+    (home / '.task' / 'hooks' / 'on-add_gittw.py').write_text('#!/bin/sh\n')
+    capsys.readouterr()
+    mobilize.main(['check'])
+    assert 'out of step with mobilize.hooks' in capsys.readouterr().out
+
+
+def test_pretest_tests_the_chosen_hooks_only(station, home):
+    (station / 'local.rc').write_text('gittw.device = t1\n')
+    (station / '.taskrc').write_text((station / '.taskrc').read_text() + 'include ~/.task/local.rc\n')
+    mobilize.main(['hooks', '--set', 'good'])
+    rows = {r[0] for r in mobilize.hook_pretest()}
+    assert 'on-add_good.sh' in rows and 'on-add_bad.sh' not in rows

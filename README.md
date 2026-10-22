@@ -26,8 +26,8 @@ that's Termux, not mobilize. Run `termux-change-repo` (pick a mirror group near 
 `pkg upgrade`, then the three lines again. Termux is a rolling release: a long-unused install needs
 upgrading before it installs anything.
 
-**Status: 0.2.0, testing.** `mobilize init`, `check`, `stations` and `-e` work and are tested (pytest, in
-a fake home folder). `check --hooks` (the hook pre-test) since 0.2.0. Still planned: hook sets per platform. This
+**Status: 0.3.0, testing.** `mobilize init`, `check`, `stations` and `-e` work and are tested (pytest, in
+a fake home folder). `check --hooks` (the hook pre-test) since 0.2.0; `hooks` (each station's chosen hooks) since 0.3.0. This
 README also keeps what was learned setting up the first phone by hand (2026-10-21).
 
 ## TL;DR
@@ -39,8 +39,11 @@ README also keeps what was learned setting up the first phone by hand (2026-10-2
   the task data resolves a collision per task, last write wins. All of that lives in gittw (planned).
 - **Shared config, local differences:** `~/.taskrc` is a symlink to the tracked `~/.task/.taskrc`, which
   ends with `include ~/.task/local.rc`. `local.rc` is untracked and holds what this station is.
-- **Each hook says which platforms it suits** (`# tw-platforms: desktop mobile`); a station runs the hooks
-  marked for it, via 2.6.2's `hooks.location` (planned).
+- **Each station chooses its hooks:** `mobilize hooks --set need-priority,time-defaults,gittw` writes
+  `mobilize.hooks`, `hooks.location` and `hooks = on` into `local.rc`, and builds `~/.task/hooks.d/<station>/`
+  (links to just those apps' hooks; gitignored) for 2.6.2's `hooks.location`. `mobilize hooks` rebuilds it
+  after a pull brings new hooks, `--all` goes back to every hook, and `check --hooks` tests the chosen set.
+  (Marks in the hooks themselves, `# tw-platforms: desktop mobile`, may come later.)
 - `mobilize init` does the setup, `mobilize check` finds what has drifted, `mobilize -e` edits
   `mobilize.rc` (`-e local`: this station's `local.rc`).
 - **Taskwarrior 3.x gets a loud warning, not a refusal:** nothing here is tested with it, but nothing

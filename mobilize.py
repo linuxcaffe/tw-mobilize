@@ -22,6 +22,13 @@ Commands
                                   of ~/.task, and time each against no hooks. Never
                                   touches your tasks or your hooks' real files.
   mobilize stations               The stations mobilize.rc knows about.
+  mobilize hooks [--set APPS | --all]
+                                  Which hooks this station runs. --set need-priority,gittw
+                                  writes local.rc (mobilize.hooks, hooks.location, hooks = on)
+                                  and builds ~/.task/hooks.d/<station>/: links to just those
+                                  apps' hooks. --all goes back to every hook. No option:
+                                  rebuild the folder from local.rc (after a pull brings new
+                                  hooks) and list it.
   mobilize -e [local]             Edit mobilize.rc (shared by every station), or this
                                   station's local.rc, in $VISUAL / $EDITOR.
   mobilize -h                     This help.
@@ -51,7 +58,7 @@ import sys
 import urllib.request
 from pathlib import Path
 
-__version__ = '0.2.1'
+__version__ = '0.3.0'
 
 OK, DONE, WOULD, SKIP, WARN, FAIL, YOU = 'ok', 'done', 'would', 'skip', 'warn', 'fail', 'you'
 
@@ -624,6 +631,19 @@ class Init:
             self.note(OK, 'includes', 'every include resolves')
         return not broken or self.dry
 
+    def step_hooks(self):
+        """A station that chose its hooks gets its hooks.d folder back (it's gitignored, so a clone lacks it)."""
+        if not _list(read_rc(local_rc()).get('mobilize.hooks')):
+            self.note(SKIP, 'hooks', 'this station runs every hook (or none: hooks = off); choose with mobilize hooks --set')
+            return True
+        if self.dry:
+            self.note(WOULD, 'hooks', 'rebuild the hooks.d folder from mobilize.hooks')
+            return True
+        lines = []
+        hooks(out=lines.append)
+        self.note(OK, 'hooks', lines[0] if lines else '')
+        return True
+
     def step_path(self):
         scripts = task_dir() / 'scripts'
         bashrc = Path.home() / '.bashrc'
@@ -734,7 +754,7 @@ class Init:
 
     def run(self):
         steps = [self.step_identity, self.step_packages, self.step_task, self.step_key, self.step_clone,
-                 self.step_push, self.step_taskrc, self.step_local_rc, self.step_state_files, self.step_path,
+                 self.step_push, self.step_taskrc, self.step_local_rc, self.step_state_files, self.step_hooks, self.step_path,
                  self.step_mobilize_rc, self.step_commit, self.step_web, self.step_launcher]
         self.out(f'mobilize init{" (dry run: nothing changes)" if self.dry else ""}')
         for step in steps:
@@ -861,6 +881,15 @@ def checks():
             + ('' if hooks_on else ' (hooks are off)'))
     if not lacking:
         add('hooks', OK, f"{'on' if hooks_on else 'off'}; none calls a missing tool")
+    apps = _list(s.get('mobilize.hooks'))
+    if apps and name:
+        want = {f.name for f in hook_files(apps)}
+        have = {p.name for p in station_hooks_dir(name).glob('on-*') if p.exists()}
+        if want != have:
+            add('hooks', WARN, f"{station_hooks_dir(name)} is out of step with mobilize.hooks "
+                               f"({', '.join(apps)}): run `mobilize hooks`")
+        else:
+            add('hooks', OK, f"{len(want)} chosen: {', '.join(apps)}")
 
     r = run(['task', 'rc.hooks=off', 'rc.context=none', '_show']) if v else None
     if r and r.returncode == 0:
@@ -961,7 +990,10 @@ def hook_pretest():
         root = Path(tmp)
         t, env = _sandbox(root)
         assert str(t).startswith(tmp) and t != task_dir()
-        sand_hooks = t / 'hooks' if hdir.resolve() == (task_dir() / 'hooks').resolve() else hdir
+        try:    # the station's folder inside the sandbox copy (hooks.d links are relative, so they resolve there)
+            sand_hooks = t / hdir.relative_to(task_dir())
+        except ValueError:
+            sand_hooks = hdir
         # The baseline: no hooks, fastest of three runs (the first warms the caches)
         base = {}
         for n in range(3):
@@ -1030,6 +1062,93 @@ def edit(which='shared', out=print):
     return code
 
 
+def hook_files(apps, hdir=None):
+    """The hook files in ~/.task/hooks belonging to apps (names like need-priority, or file names)."""
+    hdir = hdir or task_dir() / 'hooks'
+    out = []
+    for p in sorted(hdir.glob('on-*')):
+        for app in apps:
+            if p.name == app or re.match(r'^on-(add|modify|exit|launch)[_-]%s\.[a-z]+$' % re.escape(app), p.name):
+                out.append(p)
+                break
+    return out
+
+
+def station_hooks_dir(station):
+    return task_dir() / 'hooks.d' / station
+
+
+def set_local(updates, comment=None):
+    """Set keys in local.rc: replace a key's line where it is, else append (with a comment once)."""
+    path = local_rc()
+    lines = path.read_text().splitlines() if path.exists() else []
+    left = dict(updates)
+    out = []
+    for line in lines:
+        key = line.split('#', 1)[0].split('=', 1)[0].strip()
+        if '=' in line.split('#', 1)[0] and key in left:
+            if left[key] is not None:
+                out.append(f'{key} = {left[key]}')
+            left.pop(key)
+            continue
+        out.append(line)
+    new = [f'{k} = {v}' for k, v in left.items() if v is not None]
+    if new:
+        out += ([''] + [f'# {comment}'] if comment else ['']) + new
+    path.write_text('\n'.join(out) + '\n')
+
+
+def hooks(set_=None, all_=False, out=print):
+    rc = read_rc(local_rc())
+    station = rc.get('gittw.device')
+    if not station:
+        out(f'{local_rc()} names no station (gittw.device): run `mobilize init` first')
+        return 2
+    folder = station_hooks_dir(station)
+    shown = '~/' + str(folder.relative_to(Path.home())) if str(folder).startswith(str(Path.home())) else str(folder)
+    if all_:
+        set_local({'mobilize.hooks': None, 'hooks.location': None})
+        if folder.exists():
+            shutil.rmtree(folder)
+        out(f'{station} runs every hook in {task_dir() / "hooks"} again (hooks.location removed from local.rc)')
+        return 0
+    if set_ is not None:
+        apps = _list(set_)
+        set_local({'mobilize.hooks': ', '.join(apps), 'hooks.location': shown, 'hooks': 'on'},
+                  comment='Which hooks this station runs: `mobilize hooks --set …` writes these three lines')
+        rc = read_rc(local_rc())
+    apps = _list(rc.get('mobilize.hooks'))
+    if not apps:
+        out(f'{station} runs every hook in {task_dir() / "hooks"} (no mobilize.hooks in local.rc). '
+            'Choose some: mobilize hooks --set need-priority,gittw')
+        return 0
+    files = hook_files(apps)
+    found = {a for a in apps for f in files if f.name == a or re.search(r'[_-]%s\.' % re.escape(a), f.name)}
+    folder.mkdir(parents=True, exist_ok=True)
+    want = {f.name for f in files}
+    for p in folder.iterdir():
+        if p.is_symlink() and p.name not in want:
+            p.unlink()
+    for f in files:
+        link = folder / f.name
+        target = os.path.relpath(f, folder)
+        if not (link.is_symlink() and os.readlink(link) == target):
+            if link.is_symlink() or link.exists():
+                link.unlink()
+            link.symlink_to(target)
+    out(f'{station} runs {len(files)} hook{"s" if len(files) != 1 else ""} from {shown}:')
+    for f in files:
+        out(f'  {f.name}{"" if os.access(f, os.X_OK) else "  (not executable: off)"}')
+    missing = [a for a in apps if a not in found]
+    for a in missing:
+        out(f'  warn: no hook in {task_dir() / "hooks"} belongs to {a!r}')
+    if not ignored(folder / 'x'):
+        out(f'  warn: {task_dir() / "hooks.d"} is not in .gitignore: add `hooks.d/` there (one station\'s choice)')
+    if read_rc(local_rc()).get('hooks', 'on').lower() in ('off', 'no', '0', 'false'):
+        out('  note: hooks = off in local.rc, so none of them runs yet')
+    return 1 if missing else 0
+
+
 def show_stations(out=print):
     st = stations()
     if not st:
@@ -1064,6 +1183,10 @@ def main(argv=None):
     c.add_argument('--json', action='store_true')
     c.add_argument('--hooks', action='store_true', help='the hook pre-test (a sandbox; takes a while)')
     sub.add_parser('stations', help='the stations mobilize.rc knows about')
+    h = sub.add_parser('hooks', help='which hooks this station runs')
+    g = h.add_mutually_exclusive_group()
+    g.add_argument('--set', metavar='APPS', help='comma-separated app names (need-priority,gittw,…)')
+    g.add_argument('--all', action='store_true', help='every hook again')
     a = p.parse_args(argv)
     if a.edit:
         return edit(a.edit)
@@ -1071,6 +1194,8 @@ def main(argv=None):
         return Init(a.data, a.station, a.platform, a.web, a.dry_run, a.yes).run()
     if a.cmd == 'stations':
         return show_stations()
+    if a.cmd == 'hooks':
+        return hooks(a.set, a.all)
     if a.cmd == 'check':
         return pretest(a.json) if a.hooks else check(a.json)
     p.print_help()
