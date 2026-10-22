@@ -26,8 +26,8 @@ that's Termux, not mobilize. Run `termux-change-repo` (pick a mirror group near 
 `pkg upgrade`, then the three lines again. Termux is a rolling release: a long-unused install needs
 upgrading before it installs anything.
 
-**Status: 0.4.0, testing.** `mobilize init`, `check`, `stations` and `-e` work and are tested (pytest, in
-a fake home folder). `check --hooks` (the hook pre-test) since 0.2.0; `hooks` (each station's chosen hooks) since 0.3.0. This
+**Status: 0.5.0, testing.** `mobilize init`, `check`, `stations` and `-e` work and are tested (pytest, in
+a fake home folder). `check --hooks` (the hook pre-test) since 0.2.0; `hooks` (each station's chosen hooks) since 0.3.0; since 0.5.0 the Termux launcher restarts tw-web when it dies, and opening Termux starts it. This
 README also keeps what was learned setting up the first phone by hand (2026-10-21).
 
 ## TL;DR
@@ -59,6 +59,36 @@ README also keeps what was learned setting up the first phone by hand (2026-10-2
 | `~/.task/local.rc` | written per station, untracked | `gittw.device`, `tw.platforms`, `hooks=off` until hooks are tested, `hooks.location` later |
 | `PATH` | `~/.bashrc`: `export PATH="$HOME/.task/scripts:$PATH"` | gives `tw`, `gittw`, the fleet scripts |
 | tw-web | `git clone` of tw-web, `pip install -r requirements.txt`, `python app.py` | serves `localhost:5000` only; open it in the browser and install it as an app |
+| Launcher | `~/.shortcuts/tw-web` (Termux) | starts tw-web in a restart loop, then opens the browser; `--start` only starts it |
+| Autostart | a marked block in `~/.bashrc` (Termux) | opening Termux starts tw-web if it isn't running |
+
+## Keeping tw-web running on Android
+
+Android stops apps' background work when it likes: a server that ran fine for ten minutes is
+gone, and the page (served from the browser's cache) says "Network error: Failed to fetch".
+Three things help; mobilize does the first two.
+
+1. **The launcher keeps it going.** `~/.shortcuts/tw-web` takes Termux's wake lock and runs the
+   server in a loop that starts it again when it dies (a crash, or Android killing just the
+   server). It doesn't restart a server stopped on purpose (tw-web's Settings → Stop server,
+   Ctrl-C, `kill`), and gives up after 5 quick failures in a row. Each start, death and restart
+   is a line in `~/.cache/tw-web/server.out`.
+2. **Opening Termux starts it.** When Android kills Termux, the loop goes too. `mobilize init`
+   writes a marked block to `~/.bashrc` that runs `~/.shortcuts/tw-web --start`, so opening
+   Termux (or ssh into it) brings tw-web back. It takes the wake lock only when it starts the
+   server, not in every shell. Don't want it: `mobilize.web.autostart = no` in `local.rc`, then
+   delete the block (between the `>>> mobilize: tw-web autostart >>>` lines).
+3. **Tell Android to leave Termux alone (you):**
+   - Settings → Apps → Termux → Battery: **Unrestricted** (not "Optimized").
+   - Android 12 and later also have a "phantom process killer" that stops processes Termux
+     started. On Android 14 and later: Developer options → **Disable child process
+     restrictions**. On 12–13 it takes adb from a computer:
+     `adb shell device_config put activity_manager max_phantom_processes 2147483647`.
+   - Some makers (Samsung among them) add their own app-sleeping lists: keep Termux off
+     "Sleeping apps" / "Deep sleeping apps".
+
+`mobilize check` warns when the launcher is the old one (no restart loop) or `~/.bashrc` lacks
+the autostart block.
 
 ## Setting up a phone by hand (what worked, 2026-10-21)
 
@@ -123,7 +153,7 @@ On `s5` (2026-10-21) tw-web installed with no compiler (Python 3.13, Werkzeug 3.
 | A read changed `pending.data` on `s5` | 2.6.2 expires `until:` tasks on any command (`export` too, even with `rc.gc=off`); gc and built-in recurrence also write on reads | not a tool bug: the merge driver absorbs expiry; `gc=off` in the shared `.taskrc` with gc run at sync time keeps gc out of reads (2026-10-22). `init` configures the driver in each clone |
 
 | Fewer contexts in tw-web on `s5` (`need`, `tod`) | both are written by hooks: `context.need.read` in `need.rc` (tracked, but the hook rewrites it; the committed copy is blank) and `context.tod.read` in `tod.rc` (gitignored). With `hooks=off` nothing fills them | expected until the station runs those hooks; `check` lists contexts that are empty |
-| tw-web: "Network error: Failed to fetch", no contexts | Android stopped Termux, so the server died (its log ends 13:42); the page itself came from the service worker's cache | `termux-wake-lock`, Termux set to "unrestricted" battery use, and a launcher that starts the server if it's down. tw-web could say "the tw-web server isn't running" instead |
+| tw-web: "Network error: Failed to fetch", no contexts | Android stopped Termux, so the server died (its log ends 13:42); the page itself came from the service worker's cache | 0.5.0: the launcher runs it in a restart loop with the wake lock, and `~/.bashrc` starts it when Termux opens (see "Keeping tw-web running on Android"); battery "Unrestricted" is you. It happened again in the offline test of 2026-10-22, after ~10 minutes; sshd died with it. tw-web is to say "the tw-web server isn't answering" instead |
 
 | **Hook pre-test, 2026-10-22** (`mobilize check --hooks`, 25 hooks): `yoga` +0.33 s on a read with all hooks, `s5` **+4.3 s on a read and +33 s over five commands**: each Python hook costs ~0.05 s on the laptop, 0.4–0.75 s on the phone (Python start-up) | the phone needs a small hook set; tw-web's reads already run with hooks off, but every write fires the on-launch, on-add/modify and on-exit chains | choose the `mobile` set by these numbers |
 | `on-modify_hledger-add.py` fails every `done` in the sandbox | it checks `TW_NOINTERACT` *before* whether the task is a transaction, so under tw-web (which sets it) every completion is refused with `tw_needs_pty` | a bug in tw-hledger-add-hook (since 2026-07-11): check the trigger first |
@@ -236,7 +266,9 @@ remote is an argument, so the repo can be public.
 | Gitignored include targets | yes, created empty |
 | `PATH` in `~/.bashrc` | yes, once |
 | tw-web | yes: clone, `pip install` (asks before installing `clang`) |
-| Launcher | yes: a Termux:Widget shortcut in `~/.shortcuts/` (the widget app itself is **you**, from F-Droid) |
+| Launcher | yes: a Termux:Widget shortcut in `~/.shortcuts/` that restarts tw-web when it dies (the widget app itself is **you**, from F-Droid); an unedited older launcher is replaced |
+| Autostart | yes: a marked block in `~/.bashrc`, so opening Termux starts tw-web (`mobilize.web.autostart = no` leaves it out) |
+| Battery "Unrestricted", phantom process killer | **you** (see "Keeping tw-web running on Android") |
 | Install tw-web as a browser app | **you**: it opens `http://localhost:5000` with `termux-open-url` |
 | Commit the shared files it changed (`mobilize.rc`, its include), together; never push | yes |
 | Final `check` | yes |

@@ -58,7 +58,7 @@ import sys
 import urllib.request
 from pathlib import Path
 
-__version__ = '0.4.0'
+__version__ = '0.5.0'
 
 OK, DONE, WOULD, SKIP, WARN, FAIL, YOU = 'ok', 'done', 'would', 'skip', 'warn', 'fail', 'you'
 
@@ -363,6 +363,77 @@ def launcher_text(d, py, port=WEB_PORT):
     return f"""\
 #!{prefix}/bin/sh
 # tw-web: start the server if it isn't running, then open it in the browser.
+# Written by `mobilize init`, which replaces it when a newer mobilize writes it
+# differently (unless you've edited it). Termux:Widget shows it on the home screen.
+#
+#   ~/.shortcuts/tw-web           start tw-web if needed, then open it in the browser
+#   ~/.shortcuts/tw-web --start   start tw-web if needed, nothing else (~/.bashrc runs this)
+#
+# The server runs in a loop that starts it again when it dies: a crash, or Android
+# stopping it. Not when it was stopped on purpose (Settings → Stop server, Ctrl-C, kill),
+# and not after 5 quick failures in a row. Android can also stop the loop itself; then
+# opening Termux starts it again (the block mobilize writes in ~/.bashrc).
+# Server output, and the loop's notes: ~/.cache/tw-web/server.out
+port={port}
+run=${{XDG_RUNTIME_DIR:+$XDG_RUNTIME_DIR/tw-web}}
+run=${{run:-$HOME/.cache/tw-web}}
+pidf=$run/tw-web.pid
+loopf=$run/tw-web.loop
+log=$HOME/.cache/tw-web/server.out
+
+up() {{ curl -s -o /dev/null --max-time 2 http://127.0.0.1:$port/; }}
+looping() {{ [ -f "$loopf" ] && kill -0 "$(cat "$loopf")" 2>/dev/null; }}
+note() {{ echo "$(date '+%F %T') mobilize: $*" >> "$log"; }}
+
+if [ "$1" = --loop ]; then
+    echo $$ > "$loopf"
+    cd "{d}" || exit 1
+    fails=0
+    while :; do
+        t0=$(date +%s)
+        "{py}" app.py >> "$log" 2>&1 &
+        echo $! > "$pidf"
+        wait $!
+        code=$?
+        # tw-web's Stop removes the PID file; SIGTERM/SIGINT mean someone stopped it
+        if [ ! -f "$pidf" ] || [ $code -eq 0 ] || [ $code -eq 130 ] || [ $code -eq 143 ]; then
+            note "tw-web stopped (exit $code): not restarting"
+            break
+        fi
+        if [ $(( $(date +%s) - t0 )) -lt 30 ]; then fails=$((fails + 1)); else fails=0; fi
+        if [ $fails -ge 5 ]; then
+            note "tw-web failed 5 times in a row (exit $code): giving up, see above"
+            break
+        fi
+        note "tw-web died (exit $code): starting it again"
+        sleep 2
+    done
+    rm -f "$pidf" "$loopf"
+    termux-wake-unlock 2>/dev/null
+    exit 0
+fi
+
+if ! up && ! looping; then
+    mkdir -p "$run" "${{log%/*}}"
+    termux-wake-lock 2>/dev/null
+    note "starting tw-web"
+    nohup sh "$0" --loop > /dev/null 2>&1 &
+    [ -t 1 ] && echo "tw-web: starting on http://localhost:$port/"
+    [ "$1" = --start ] && exit 0
+    i=0
+    while [ $i -lt 30 ] && ! up; do sleep 0.5; i=$((i + 1)); done
+fi
+[ "$1" = --start ] && exit 0
+termux-open-url http://localhost:$port/
+"""
+
+
+def _launcher_text_0_4(d, py, port=WEB_PORT):
+    """The launcher mobilize 0.1.0–0.4.0 wrote: init replaces it when it finds it unedited."""
+    prefix = os.environ.get('PREFIX', '/data/data/com.termux/files/usr')
+    return f"""\
+#!{prefix}/bin/sh
+# tw-web: start the server if it isn't running, then open it in the browser.
 # Written by `mobilize init`. Termux:Widget shows it on the home screen; it also runs
 # from a shell (~/.shortcuts/tw-web). Server output: ~/.cache/tw-web/server.out
 termux-wake-lock
@@ -373,6 +444,42 @@ if ! curl -s -o /dev/null http://127.0.0.1:{port}/; then
 fi
 termux-open-url http://localhost:{port}/
 """
+
+
+AUTOSTART_BEGIN = '# >>> mobilize: tw-web autostart >>>'
+AUTOSTART_END = '# <<< mobilize: tw-web autostart <<<'
+
+
+def autostart_block():
+    return f"""\
+{AUTOSTART_BEGIN}
+# Written by `mobilize init`. Opening Termux (or ssh into it) starts tw-web if it isn't
+# running: Android stops Termux's background work when it likes. Keep it out with
+# mobilize.web.autostart = no in local.rc, then delete this block.
+if [ -x "$HOME/.shortcuts/tw-web" ]; then "$HOME/.shortcuts/tw-web" --start; fi
+{AUTOSTART_END}
+"""
+
+
+def autostart_wanted(s=None):
+    s = settings() if s is None else s
+    return str(s.get('mobilize.web.autostart', 'yes')).strip().lower() not in ('no', 'off', 'false', '0')
+
+
+def bashrc_autostart(text):
+    """The autostart block in a .bashrc's text: 'current', 'old' (ours, written differently) or None."""
+    m = re.search(re.escape(AUTOSTART_BEGIN) + r'.*?' + re.escape(AUTOSTART_END) + r'\n?', text, re.S)
+    if not m:
+        return None
+    return 'current' if m.group(0).rstrip('\n') == autostart_block().rstrip('\n') else 'old'
+
+
+def with_autostart(text):
+    """The .bashrc text with the autostart block in it once, current."""
+    pattern = re.escape(AUTOSTART_BEGIN) + r'.*?' + re.escape(AUTOSTART_END) + r'\n?'
+    if re.search(pattern, text, re.S):
+        return re.sub(pattern, lambda _: autostart_block(), text, count=1, flags=re.S)
+    return text + ('' if not text or text.endswith('\n') else '\n') + '\n' + autostart_block()
 
 
 # ── init ──────────────────────────────────────────────────────────────────────
@@ -787,22 +894,48 @@ class Init:
         d = web_dir()
         path = Path.home() / '.shortcuts' / 'tw-web'
         text = launcher_text(d, web_python(d))
-        if path.exists():
-            self.note(OK if path.read_text() == text else WARN, 'launcher',
-                      f'{path}' + ('' if path.read_text() == text else ' (edited by hand: left as it is)'))
-            return True
         def write():
             path.parent.mkdir(exist_ok=True)
             path.write_text(text)
             path.chmod(0o755)
+        if path.exists():
+            have = path.read_text()
+            if have == text:
+                self.note(OK, 'launcher', f'{path}')
+            elif have == _launcher_text_0_4(d, web_python(d)):
+                self.act('launcher', f'{path}: the newer launcher (restarts tw-web when it dies)', write)
+            else:
+                self.note(WARN, 'launcher', f'{path} (edited by hand: left as it is)')
+            return True
         self.act('launcher', f'{path} (Termux:Widget, or run it from a shell)', write)
         self.note(YOU, 'launcher', 'for a home-screen button, install Termux:Widget (F-Droid) and add its widget')
         return True
 
+    def step_autostart(self):
+        if not self.web or not is_termux():
+            self.note(SKIP, 'autostart', 'Termux only' if self.web else '--no-web')
+            return True
+        if not autostart_wanted():
+            self.note(SKIP, 'autostart', 'mobilize.web.autostart = no')
+            return True
+        bashrc = Path.home() / '.bashrc'
+        try:
+            text = bashrc.read_text()
+        except OSError:
+            text = ''
+        state = bashrc_autostart(text)
+        if state == 'current':
+            self.note(OK, 'autostart', f'{bashrc.name} starts tw-web when Termux opens')
+            return True
+        return self.act('autostart', f'{bashrc}: start tw-web when Termux opens'
+                                     + (' (block rewritten)' if state else ''),
+                        lambda: bashrc.write_text(with_autostart(text)))
+
     def run(self):
         steps = [self.step_identity, self.step_packages, self.step_task, self.step_key, self.step_clone,
                  self.step_push, self.step_git_identity, self.step_merge_driver, self.step_taskrc, self.step_local_rc, self.step_state_files, self.step_hooks, self.step_path,
-                 self.step_mobilize_rc, self.step_commit, self.step_web, self.step_launcher]
+                 self.step_mobilize_rc, self.step_commit, self.step_web, self.step_launcher,
+                 self.step_autostart]
         self.out(f'mobilize init{" (dry run: nothing changes)" if self.dry else ""}')
         for step in steps:
             try:
@@ -953,6 +1086,19 @@ def checks():
     wd = web_dir(s)
     if (wd / 'app.py').exists():
         add('tw-web', OK, f"{wd}{', running' if web_up() else ', not running'}")
+        if is_termux():
+            launcher = Path.home() / '.shortcuts' / 'tw-web'
+            if not launcher.exists():
+                add('launcher', WARN, f'no {launcher}: mobilize init writes it')
+            elif launcher.read_text() == _launcher_text_0_4(wd, web_python(wd)):
+                add('launcher', WARN, f'{launcher} is the old one (no restart when tw-web dies): mobilize init')
+            try:
+                state = bashrc_autostart((Path.home() / '.bashrc').read_text())
+            except OSError:
+                state = None
+            if autostart_wanted(s) and state != 'current':
+                add('autostart', WARN, ('~/.bashrc has an older autostart block' if state else
+                                        'opening Termux won\'t start tw-web if Android stopped it') + ': mobilize init')
     else:
         add('tw-web', OK if not is_termux() else WARN, f'not installed at {wd}')
 

@@ -4,7 +4,11 @@ plain path, so the SSH key and access steps are skipped; Termux is never detecte
 import importlib.util
 import json
 import os
+import socket
 import subprocess
+import sys
+import time
+from types import SimpleNamespace
 from pathlib import Path
 
 import pytest
@@ -279,9 +283,118 @@ def test_rc_templates_read_back(home):
 
 def test_launcher_starts_the_server_only_when_it_is_down():
     text = mobilize.launcher_text(Path('/x/tw-web'), '/usr/bin/python')
-    assert 'if ! curl -s -o /dev/null http://127.0.0.1:5000/' in text
-    assert 'cd /x/tw-web && nohup /usr/bin/python app.py' in text
-    assert text.rstrip().endswith('termux-open-url http://localhost:5000/')
+    assert 'if ! up && ! looping; then' in text
+    assert 'cd "/x/tw-web"' in text and '"/usr/bin/python" app.py' in text
+    assert text.rstrip().endswith('termux-open-url http://localhost:$port/')
+
+
+def _free_port():
+    with socket.socket() as so:
+        so.bind(('127.0.0.1', 0))
+        return so.getsockname()[1]
+
+
+def _wait(cond, secs=10):
+    end = time.time() + secs
+    while time.time() < end:
+        if cond():
+            return True
+        time.sleep(0.1)
+    return False
+
+
+@pytest.fixture
+def launcher(tmp_path):
+    """The real launcher script, run with sh against a stand-in app.py on a free port."""
+    port = _free_port()
+    web = tmp_path / 'web'
+    web.mkdir()
+    (web / 'app.py').write_text(
+        'import http.server\n'
+        f'http.server.HTTPServer(("127.0.0.1", {port}), http.server.SimpleHTTPRequestHandler).serve_forever()\n')
+    bin_ = tmp_path / 'bin'
+    bin_.mkdir()
+    for name in ('termux-wake-lock', 'termux-wake-unlock', 'termux-open-url'):
+        (bin_ / name).write_text(f'#!/bin/sh\necho {name} "$@" >> {tmp_path}/termux.log\n')
+        (bin_ / name).chmod(0o755)
+    script = tmp_path / 'tw-web'
+    script.write_text(mobilize.launcher_text(web, sys.executable, port=port))
+    run = tmp_path / 'run'
+    env = dict(os.environ, HOME=str(tmp_path), XDG_RUNTIME_DIR=str(run), PATH=f"{bin_}:{os.environ['PATH']}")
+    paths = SimpleNamespace(script=script, port=port, env=env, pidf=run / 'tw-web' / 'tw-web.pid',
+                            loopf=run / 'tw-web' / 'tw-web.loop', log=tmp_path / '.cache' / 'tw-web' / 'server.out',
+                            termux=tmp_path / 'termux.log')
+    paths.go = lambda *a: subprocess.run(['sh', str(script), *a], env=env, capture_output=True, text=True, timeout=30)
+    paths.up = lambda: mobilize.web_up(port)
+    yield paths
+    for f in (paths.pidf, paths.loopf):              # never leave a server or loop behind
+        try:
+            os.kill(int(f.read_text()), 9)
+        except (OSError, ValueError):
+            pass
+
+
+def test_launcher_start_runs_the_server_in_a_loop_that_survives_a_crash(launcher):
+    r = launcher.go('--start')
+    assert r.returncode == 0, r.stderr
+    assert _wait(launcher.up), launcher.log.read_text() if launcher.log.exists() else 'no log'
+    assert 'termux-open-url' not in launcher.termux.read_text(), '--start opens no browser'
+    assert 'termux-wake-lock' in launcher.termux.read_text()
+    first = int(launcher.pidf.read_text())
+    os.kill(first, 9)                                # Android (or a crash) kills the server
+    assert _wait(lambda: launcher.pidf.exists() and int(launcher.pidf.read_text()) != first and launcher.up())
+    assert 'starting it again' in launcher.log.read_text()
+    launcher.go('--start')                           # already running: no second loop
+    assert launcher.log.read_text().count('mobilize: starting tw-web') == 1
+
+
+def test_launcher_loop_does_not_restart_a_server_stopped_on_purpose(launcher):
+    launcher.go('--start')
+    assert _wait(launcher.up)
+    pid = int(launcher.pidf.read_text())
+    launcher.pidf.unlink()                           # what tw-web's Stop does, then SIGTERM
+    os.kill(pid, 15)
+    assert _wait(lambda: not launcher.loopf.exists())
+    assert not launcher.up() and 'not restarting' in launcher.log.read_text()
+    assert 'termux-wake-unlock' in launcher.termux.read_text()
+
+
+def test_launcher_without_start_opens_the_browser(launcher):
+    launcher.go()
+    assert launcher.up()
+    assert f'termux-open-url http://localhost:{launcher.port}/' in launcher.termux.read_text()
+
+
+def test_autostart_block_is_added_once_and_rewritten_in_place():
+    text = 'export PATH=x\n'
+    once = mobilize.with_autostart(text)
+    assert once.startswith(text) and mobilize.bashrc_autostart(once) == 'current'
+    assert mobilize.with_autostart(once) == once
+    stale = once.replace('--start; fi', '--start; fi\necho old')
+    assert mobilize.bashrc_autostart(stale) == 'old'
+    assert mobilize.with_autostart(stale) == once
+    assert mobilize.bashrc_autostart(text) is None
+
+
+def test_init_on_termux_writes_the_autostart_block_and_replaces_an_old_launcher(home, remote, monkeypatch, capsys):
+    monkeypatch.setenv('TERMUX_VERSION', '0.118')
+    web = home / 'tw-web'
+    web.mkdir()
+    (web / 'app.py').write_text('')
+    shortcut = home / '.shortcuts' / 'tw-web'
+    shortcut.parent.mkdir()
+    shortcut.write_text(mobilize._launcher_text_0_4(web, mobilize.web_python(web)))
+    monkeypatch.setattr(mobilize, 'web_dir', lambda s=None: web)
+    init = mobilize.Init.__new__(mobilize.Init)
+    init.dry, init.web, init.worst, init.out = False, True, mobilize.OK, lambda *a: None
+    init.note = lambda status, step, detail: None
+    init.act = lambda step, detail, fn: (fn(), True)[1]
+    assert init.step_launcher() and init.step_autostart()
+    assert shortcut.read_text() == mobilize.launcher_text(web, mobilize.web_python(web))
+    assert mobilize.bashrc_autostart((home / '.bashrc').read_text()) == 'current'
+    (home / '.task').mkdir(exist_ok=True)
+    (home / '.task' / 'local.rc').write_text('mobilize.web.autostart = no\n')
+    assert not mobilize.autostart_wanted()
 
 
 def test_ssh_urls():
