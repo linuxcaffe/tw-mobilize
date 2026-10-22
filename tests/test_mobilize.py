@@ -2,6 +2,7 @@
 on disk), so nothing touches ~/.task, ~/.ssh, ~/.bashrc or the network. The data URL is a
 plain path, so the SSH key and access steps are skipped; Termux is never detected."""
 import importlib.util
+import json
 import os
 import subprocess
 from pathlib import Path
@@ -280,3 +281,13 @@ def test_ssh_urls():
     assert not mobilize.is_ssh_url('https://codeberg.org/linuxcaffe/tw-web.git')
     assert not mobilize.is_ssh_url('/tmp/remote.git')
     assert mobilize.ssh_host('git@github.com:me/x.git') == 'github.com'
+
+
+def test_waiting_for_a_key_under_tw_noninteract_asks_for_a_terminal(home, monkeypatch, capsys):
+    monkeypatch.setenv('TW_NOINTERACT', '1')
+    monkeypatch.setattr(mobilize, 'reachable', lambda url: (False, 'git@x: Permission denied (publickey).'))
+    i = mobilize.Init(station='t1', out=lambda *a: None)
+    assert i._wait_for_access('access', 'git@codeberg.org:me/data.git') is False
+    err = capsys.readouterr().err
+    sig = json.loads(err.strip().splitlines()[-1])
+    assert sig['type'] == 'tw_needs_pty' and 'codeberg.org' in sig['reason']

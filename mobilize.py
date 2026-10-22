@@ -386,7 +386,8 @@ class Init:
         return True
 
     def interactive(self):
-        return sys.stdin.isatty() and not self.yes
+        """May init stop and ask? Never under TW_NOINTERACT (a client with no terminal: CONVENTIONS §1)."""
+        return sys.stdin.isatty() and not self.yes and not os.environ.get('TW_NOINTERACT')
 
     # The steps, in order
 
@@ -491,6 +492,12 @@ class Init:
             self.out(f'          {pub.read_text().strip() if pub.exists() else "(no public key)"}')
             self.out(f'          GitHub, from a station with gh:  gh ssh-key add - --title {self.station} <<< "<the key>"')
             self.out('          Codeberg: Settings → SSH / GPG Keys (web)')
+            if os.environ.get('TW_NOINTERACT'):
+                # A client with no terminal (tw-web): ask it to rerun this in one (CONVENTIONS §2)
+                print(json.dumps({'type': 'tw_needs_pty', 'cmd': os.environ.get('TW_PREFLIGHT_CMD', ''),
+                                  'reason': f'mobilize init waits for the key to be added on {ssh_host(url)}'}),
+                      file=sys.stderr)
+                return False
             if not self.interactive():
                 return False
             try:

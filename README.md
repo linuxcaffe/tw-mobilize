@@ -1,4 +1,4 @@
-- Project: https://github.com/linuxcaffe/tw-mobilize (not published yet)
+- Project: https://github.com/linuxcaffe/tw-mobilize
 - Issues:  https://github.com/linuxcaffe/tw-mobilize/issues
 
 # tw-mobilize
@@ -7,7 +7,7 @@ Set up a new Taskwarrior 2.6.2 station (an Android phone in Termux, or another L
 existing [gittw](https://github.com/linuxcaffe/gittw) repo, with [tw-web](https://github.com/linuxcaffe/tw-web)
 running on it, and check that it stays set up.
 
-**Status: 0.1.0, not published yet.** `mobilize init`, `check`, `stations` and `-e` work and are tested
+**Status: 0.1.0, testing** (`tw -I mobilize`, or the `curl` bootstrap below). `mobilize init`, `check`, `stations` and `-e` work and are tested
 (pytest, in a fake home folder). Still planned: `check --hooks` (the hook pre-test) and hook sets per
 platform. This README also keeps what was learned setting up the first phone by hand (2026-10-21). Decisions and progress live in the
 plan: `tw:docs/tw-web-android-plan.md`.
