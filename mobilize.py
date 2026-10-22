@@ -58,7 +58,7 @@ import sys
 import urllib.request
 from pathlib import Path
 
-__version__ = '0.3.0'
+__version__ = '0.4.0'
 
 OK, DONE, WOULD, SKIP, WARN, FAIL, YOU = 'ok', 'done', 'would', 'skip', 'warn', 'fail', 'you'
 
@@ -575,6 +575,53 @@ class Init:
                         self.note(WARN, 'push', f'{ssh_host(u)} refuses this station: add its key there')
         return True
 
+    def step_git_identity(self):
+        """This station's commits need a name and email (gittw sync, the auto-commit hook): without
+        one, sync stops and the hook fails silently. Set for the ~/.task clone only."""
+        if git('var', 'GIT_AUTHOR_IDENT').returncode == 0:
+            self.note(OK, 'git name', git('var', 'GIT_AUTHOR_IDENT').stdout.rsplit('>', 1)[0] + '>')
+            return True
+        if self.dry:
+            self.note(WOULD, 'git name', 'ask for a name and email for commits from this station')
+            return True
+        if not self.interactive():
+            self.note(YOU, 'git name', f'no name/email for commits here: git -C {task_dir()} config user.name '
+                                       "'Your Name'; git -C {task_dir()} config user.email you@example.com")
+            return True
+        try:
+            name = input('          Your name, for commits from this station: ').strip()
+            email = input('          Your email: ').strip()
+        except (EOFError, KeyboardInterrupt):
+            self.out('')
+            name = email = ''
+        if name and email:
+            git('config', 'user.name', name)
+            git('config', 'user.email', email)
+            self.note(DONE, 'git name', f'{name} <{email}> (for {task_dir()} only)')
+        else:
+            self.note(YOU, 'git name', 'skipped: gittw sync and the auto-commit hook will fail until it is set')
+        return True
+
+    def step_merge_driver(self):
+        """gittw's merge driver for the task data is configured per clone (.git/config)."""
+        g = task_dir() / 'scripts' / 'gittw'
+        if not g.exists():
+            self.note(SKIP, 'merge', 'no gittw in scripts/ (tw -I gittw)')
+            return True
+        if git('config', 'merge.twdata.driver').returncode == 0:
+            self.note(OK, 'merge', 'gittw merges the task data by UUID')
+            return True
+        attrs = task_dir() / '.gitattributes'
+        before = attrs.read_text() if attrs.exists() else None
+        def setup():
+            r = run([sys.executable or 'python3', str(g), 'setup'], env={'TW_TASK_DIR': str(task_dir())})
+            if r.returncode:
+                raise SystemExit(f'mobilize: gittw setup failed: {(r.stderr or r.stdout).strip()}')
+        self.act('merge', 'gittw setup (merge the task data by UUID)', setup)
+        if not self.dry and (attrs.read_text() if attrs.exists() else None) != before:
+            self.shared.append(attrs)
+        return True
+
     def step_taskrc(self):
         link, shared = taskrc_link(), task_dir() / '.taskrc'
         if not shared.exists():
@@ -754,7 +801,7 @@ class Init:
 
     def run(self):
         steps = [self.step_identity, self.step_packages, self.step_task, self.step_key, self.step_clone,
-                 self.step_push, self.step_taskrc, self.step_local_rc, self.step_state_files, self.step_hooks, self.step_path,
+                 self.step_push, self.step_git_identity, self.step_merge_driver, self.step_taskrc, self.step_local_rc, self.step_state_files, self.step_hooks, self.step_path,
                  self.step_mobilize_rc, self.step_commit, self.step_web, self.step_launcher]
         self.out(f'mobilize init{" (dry run: nothing changes)" if self.dry else ""}')
         for step in steps:
@@ -821,6 +868,12 @@ def checks():
         add('.taskrc', FAIL, f'{link} is missing')
     else:
         add('.taskrc', WARN, f'{link} is not a link to {shared}: its settings are this station\'s alone')
+
+    if git('var', 'GIT_AUTHOR_IDENT').returncode:
+        add('git name', WARN, "no name/email for commits here: gittw sync and the auto-commit hook fail "
+                              f"(git -C {d} config user.name …; user.email …)")
+    if (d / 'scripts' / 'gittw').exists() and git('config', 'merge.twdata.driver').returncode:
+        add('merge', WARN, 'gittw merge driver not configured in this clone: gittw setup')
 
     rc = read_rc(local_rc())
     name = rc.get('gittw.device')

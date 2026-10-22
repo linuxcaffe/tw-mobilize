@@ -26,7 +26,7 @@ that's Termux, not mobilize. Run `termux-change-repo` (pick a mirror group near 
 `pkg upgrade`, then the three lines again. Termux is a rolling release: a long-unused install needs
 upgrading before it installs anything.
 
-**Status: 0.3.0, testing.** `mobilize init`, `check`, `stations` and `-e` work and are tested (pytest, in
+**Status: 0.4.0, testing.** `mobilize init`, `check`, `stations` and `-e` work and are tested (pytest, in
 a fake home folder). `check --hooks` (the hook pre-test) since 0.2.0; `hooks` (each station's chosen hooks) since 0.3.0. This
 README also keeps what was learned setting up the first phone by hand (2026-10-21).
 
@@ -110,6 +110,7 @@ On `s5` (2026-10-21) tw-web installed with no compiler (Python 3.13, Werkzeug 3.
 | Found | Cause | Fixed / tool's job |
 |---|---|---|
 | `pkg`: "No mirror or mirror group is selected", then `curl`: `CANNOT LINK EXECUTABLE … ngtcp2…` (`s5`, 2026-10-22) | no `$PREFIX/etc/termux/chosen_mirrors` link; then packages half-upgraded (a newer libcurl than its ngtcp2), so `pkg` couldn't even test mirrors | Termux's, not ours: `termux-change-repo`, then `pkg upgrade` (fixed `s5`: 112 packages). README quick start says so; `init` repeats it when `pkg install` fails |
+| `gittw sync` on `s5`: `git commit` exit 128 (2026-10-22) | no git name/email on the phone: it had never committed (and the auto-commit hook had been failing silently) | `init` asks for them (for the `~/.task` clone only), `check` warns; `init` also runs `gittw setup` (the merge driver is per clone) |
 | `Permission denied (publickey)` on clone | the station's key was on neither host | `init` makes the key, prints it, and waits until `ssh -T` works for every push host |
 | A station pushing to GitHub only would be invisible | `yoga` fetches from Codeberg and pushes to both | `init` copies the push URLs; `check` compares them with the fetch URL |
 | `Could not read include file …/config/nag-state.rc` | gitignored state files (`nag-state.rc`, `tod.rc`, rewritten by hooks) are still included; **a missing include is a hard error in 2.6.2** | `init` creates every *gitignored* include target empty; a missing *tracked* one is a real error and is reported |

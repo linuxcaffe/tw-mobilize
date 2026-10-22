@@ -432,3 +432,40 @@ def test_pretest_tests_the_chosen_hooks_only(station, home):
     mobilize.main(['hooks', '--set', 'good'])
     rows = {r[0] for r in mobilize.hook_pretest()}
     assert 'on-add_good.sh' in rows and 'on-add_bad.sh' not in rows
+
+
+# ── git identity and gittw's merge driver ─────────────────────────────────────
+
+GITTW = Path.home() / 'dev' / 'gittw' / 'gittw.py'
+
+
+def test_check_warns_when_this_station_cannot_commit(home, remote, monkeypatch, capsys):
+    init('--data', remote())
+    for k in ('GIT_AUTHOR_NAME', 'GIT_AUTHOR_EMAIL', 'GIT_COMMITTER_NAME', 'GIT_COMMITTER_EMAIL'):
+        monkeypatch.delenv(k)
+    monkeypatch.setenv('EMAIL', '')
+    capsys.readouterr()
+    mobilize.main(['check'])
+    assert 'no name/email for commits here' in capsys.readouterr().out
+
+
+def test_init_without_an_identity_says_how_to_set_it(home, remote, monkeypatch, capsys):
+    url = remote()
+    for k in ('GIT_AUTHOR_NAME', 'GIT_AUTHOR_EMAIL', 'GIT_COMMITTER_NAME', 'GIT_COMMITTER_EMAIL'):
+        monkeypatch.delenv(k)
+    monkeypatch.setenv('EMAIL', '')
+    init('--data', url)
+    out = capsys.readouterr().out
+    assert 'you   git name' in out and 'config user.email' in out
+
+
+@pytest.mark.skipif(not GITTW.exists(), reason='needs ~/dev/gittw')
+def test_init_configures_gittws_merge_driver(home, remote, capsys):
+    files = dict(SEED)
+    files['scripts/gittw'] = GITTW.read_text()
+    init('--data', remote(files))
+    t = home / '.task'
+    r = subprocess.run(['git', '-C', str(t), 'config', 'merge.twdata.driver'], capture_output=True, text=True)
+    assert 'merge-data' in r.stdout
+    assert 'pending.data merge=twdata' in (t / '.gitattributes').read_text()
+    assert '.gitattributes' in sh('git', '-C', str(t), 'show', '--stat', '--format=', 'HEAD'), 'committed with the rest'
