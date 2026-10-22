@@ -21,6 +21,11 @@ python mobilize.py init --station <name> --data <your gittw repo's fetch URL>
 It stops once to show you an SSH key to add to GitHub/Codeberg, and waits until you have. Safe to run
 again: it picks up where it left off. On a station that already has your tasks: `tw -I mobilize`.
 
+**If `pkg` complains first** ("No mirror or mirror group is selected", or `CANNOT LINK EXECUTABLE`):
+that's Termux, not mobilize. Run `termux-change-repo` (pick a mirror group near you), then
+`pkg upgrade`, then the three lines again. Termux is a rolling release: a long-unused install needs
+upgrading before it installs anything.
+
 **Status: 0.1.0, testing.** `mobilize init`, `check`, `stations` and `-e` work and are tested (pytest, in
 a fake home folder). Still planned: `check --hooks` (the hook pre-test) and hook sets per platform. This
 README also keeps what was learned setting up the first phone by hand (2026-10-21).
@@ -101,6 +106,7 @@ On `s5` (2026-10-21) tw-web installed with no compiler (Python 3.13, Werkzeug 3.
 
 | Found | Cause | Fixed / tool's job |
 |---|---|---|
+| `pkg`: "No mirror or mirror group is selected", then `curl`: `CANNOT LINK EXECUTABLE … ngtcp2…` (`s5`, 2026-10-22) | no `$PREFIX/etc/termux/chosen_mirrors` link; then packages half-upgraded (a newer libcurl than its ngtcp2), so `pkg` couldn't even test mirrors | Termux's, not ours: `termux-change-repo`, then `pkg upgrade` (fixed `s5`: 112 packages). README quick start says so; `init` repeats it when `pkg install` fails |
 | `Permission denied (publickey)` on clone | the station's key was on neither host | `init` makes the key, prints it, and waits until `ssh -T` works for every push host |
 | A station pushing to GitHub only would be invisible | `yoga` fetches from Codeberg and pushes to both | `init` copies the push URLs; `check` compares them with the fetch URL |
 | `Could not read include file …/config/nag-state.rc` | gitignored state files (`nag-state.rc`, `tod.rc`, rewritten by hooks) are still included; **a missing include is a hard error in 2.6.2** | `init` creates every *gitignored* include target empty; a missing *tracked* one is a real error and is reported |

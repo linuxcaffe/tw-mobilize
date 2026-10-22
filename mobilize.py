@@ -424,7 +424,9 @@ class Init:
         def install():
             r = subprocess.run(['pkg', 'install', '-y', *missing])
             if r.returncode:
-                raise SystemExit(f"mobilize: pkg install {' '.join(missing)} failed")
+                raise SystemExit(f"mobilize: pkg install {' '.join(missing)} failed. If Termux said no mirror is "
+                                 "selected, or CANNOT LINK EXECUTABLE: termux-change-repo, then pkg upgrade, "
+                                 "then init again")
         return self.act('packages', f"pkg install {' '.join(missing)}", install)
 
     def step_task(self):
