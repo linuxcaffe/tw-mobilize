@@ -51,7 +51,7 @@ import sys
 import urllib.request
 from pathlib import Path
 
-__version__ = '0.2.0'
+__version__ = '0.2.1'
 
 OK, DONE, WOULD, SKIP, WARN, FAIL, YOU = 'ok', 'done', 'would', 'skip', 'warn', 'fail', 'you'
 
@@ -821,6 +821,11 @@ def checks():
                if raw.startswith('/') and not raw.startswith(home) and not raw.startswith('/usr/')]
     for f, n, raw in foreign:
         add('includes', WARN, f'{f}:{n} names another machine\'s home: {raw} (write ~/.task/… instead)')
+    own = [(f, n, raw) for f, n, raw, t in includes(link) if raw.startswith(home + '/') and ignored(f) is False
+           and str(f).startswith(str(task_dir()))]
+    for f, n, raw in own:
+        add('includes', WARN, f'{f}:{n}: {raw} only works on this station; the other stations need '
+                              f'~{raw[len(home):]} (installers write absolute paths: put it back)')
 
     links = [p for sub in ('scripts', 'hooks') for p in sorted((d / sub).glob('*'))
              if p.is_symlink() and not p.exists()]

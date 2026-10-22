@@ -253,6 +253,15 @@ def test_check_names_another_machines_home(home, remote, capsys):
     assert "another machine's home: /home/someone" in capsys.readouterr().out
 
 
+def test_check_flags_an_include_naming_this_stations_own_home(home, remote, capsys):
+    init('--data', remote())
+    inc = home / '.task' / 'config' / 'included.rc'
+    inc.write_text(inc.read_text() + f'include {home}/.task/config/events.rc\n')
+    capsys.readouterr()
+    mobilize.main(['check'])
+    assert 'only works on this station' in capsys.readouterr().out
+
+
 def test_check_without_a_clone_fails(home, capsys):
     assert mobilize.main(['check']) == 2
     assert 'not a git repo' in capsys.readouterr().out
