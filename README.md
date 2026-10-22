@@ -15,8 +15,9 @@ plan: `tw:docs/tw-web-android-plan.md`.
 
 - A station is a device with its own copy of `~/.task`, cloned from your gittw remote. Today: `yoga`
   (laptop, `desktop`) and `s5` (phone, `mobile`).
-- **One writer at a time.** The station holding the *feather* may write; the others only read. That keeps
-  every sync a fast-forward, so gittw never has to merge task data. The feather lives in gittw (planned).
+- **Sync often, see the others, resolve the rare collision.** Stations sync automatically when online;
+  tw-web's Sync advisory shows incoming changes and when each station last synced; a merge driver for
+  the task data resolves a collision per task, last write wins. All of that lives in gittw (planned).
 - **Shared config, local differences:** `~/.taskrc` is a symlink to the tracked `~/.task/.taskrc`, which
   ends with `include ~/.task/local.rc`. `local.rc` is untracked and holds what this station is.
 - **Each hook says which platforms it suits** (`# tw-platforms: desktop mobile`); a station runs the hooks
@@ -68,7 +69,7 @@ cd ~/dev/tw-web && pip install -r requirements.txt   # pkg install clang if a bu
 python app.py                                         # then http://localhost:5000 in the browser
 ```
 
-**Reaching the phone from another station** (the feather's direct route, and how Claude Code ran step 4
+**Reaching the phone from another station** (the direct sync route with no internet, and how Claude Code ran step 4
 on `s5`): `pkg install openssh`, add the other station's public key to `~/.ssh/authorized_keys`, run
 `sshd` (port 8022); on the other station, a `Host s5` entry with the phone's current address and
 `Port 8022`. The address changes with the network; `termux-wake-lock` keeps Termux alive.
@@ -76,7 +77,7 @@ on `s5`): `pkg install openssh`, add the other station's public key to `~/.ssh/a
 On `s5` (2026-10-21) tw-web installed with no compiler (Python 3.13, Werkzeug 3.1.9) and served the same
 104 pending tasks as `yoga`.
 
-**Until the feather exists, don't `git push` from a second station.** Its auto-commits stay local;
+**Until gittw's merge driver exists, don't `git push` from a second station.** Its auto-commits stay local;
 `git checkout -- pending.data completed.data` throws test writes away.
 
 ## Problems found (and what the tool must do about them)
@@ -91,7 +92,7 @@ On `s5` (2026-10-21) tw-web installed with no compiler (Python 3.13, Werkzeug 3.
 | Three scripts point at `yoga` paths | `make-awesome.py`, `tw-sync`, `tw-web` are symlinks to `/home/<user>/dev/…` | `check` lists dangling symlinks |
 | `included.rc`/`themes.rc` had `include /home/<user>/.task/…` | installers and `theme-select.py` write absolute paths | rewritten as `~/.task/…` on `yoga`; the writers get fixed in awesome-taskwarrior. `check`: no `/home/<user>` in rc files |
 
-| A read changed `pending.data` on `s5` | 2.6.2 expires `until:` tasks on any command (`export` too, even with `rc.gc=off`); gc and built-in recurrence also write on reads | not a tool bug: the feather's rule (a device without it never commits data; `gittw take` saves local data changes, then resets to the remote). `check` reports uncommitted data changes on a device without the feather |
+| A read changed `pending.data` on `s5` | 2.6.2 expires `until:` tasks on any command (`export` too, even with `rc.gc=off`); gc and built-in recurrence also write on reads | not a tool bug: the merge driver absorbs expiry; `gc=off` in the shared `.taskrc` with gc run at sync time keeps gc out of reads (2026-10-22). `init` configures the driver in each clone |
 
 | Fewer contexts in tw-web on `s5` (`need`, `tod`) | both are written by hooks: `context.need.read` in `need.rc` (tracked, but the hook rewrites it; the committed copy is blank) and `context.tod.read` in `tod.rc` (gitignored). With `hooks=off` nothing fills them | expected until the station runs those hooks; `check` lists contexts that are empty |
 | tw-web: "Network error: Failed to fetch", no contexts | Android stopped Termux, so the server died (its log ends 13:42); the page itself came from the service worker's cache | `termux-wake-lock`, Termux set to "unrestricted" battery use, and a launcher that starts the server if it's down. tw-web could say "the tw-web server isn't running" instead |
@@ -138,7 +139,7 @@ remote is an argument, so the repo can be public.
 **`check`** (also on its own, any time, any station): `task` is 2.6.2; every include resolves; no
 `/home/<user>` in rc files; `local.rc` names the station; push URLs cover the fetch URL; no dangling
 symlinks or orphan gitlinks; each hook in this station's set has its interpreter and the tools it calls
-(`nb`, `hledger`); who holds the feather. **`check --hooks`** runs each hook against a throwaway database
+(`nb`, `hledger`); the merge driver is configured. **`check --hooks`** runs each hook against a throwaway database
 with sample input and times it: the pre-test that decides which hooks are `mobile`.
 
 **Same tool on Linux:** `init` skips the Termux-only steps (pkg, deb, widget) when it isn't in Termux, so
@@ -146,7 +147,7 @@ a new laptop or desktop station is set up the same way.
 
 ## Not here
 
-- **Sync rules and the feather:** gittw (`gittw take` / `give`, the write guard).
+- **Sync rules:** gittw (station-tagged commits, last-seen, housekeeping at sync, the merge driver).
 - **Hook marks:** in each hook; the registry's `.meta` may mirror them later.
 - **tw-web changes** (`termux-open` for file links, a Termux launcher): tw-web.
 - Taskwarrior 3.x.
