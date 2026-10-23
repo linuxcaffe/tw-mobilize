@@ -7,6 +7,13 @@ Set up a new Taskwarrior 2.6.2 station (an Android phone in Termux, or another L
 existing [gittw](https://github.com/linuxcaffe/gittw) repo, with [tw-web](https://github.com/linuxcaffe/tw-web)
 running on it, and check that it stays set up.
 
+**Two ways to use tw-web on a phone; this tool is the second:**
+- **Connected:** the phone's browser opens the laptop's tw-web over [Tailscale](https://tailscale.com)
+  (tw-web's README, "Network access"). Nothing to install on the phone but Tailscale, but the laptop must
+  be on and both must be online.
+- **On the phone itself (mobilize):** the phone is a station of its own: Taskwarrior, your tasks and
+  tw-web all run in Termux, work offline, and sync with the other stations through gittw when online.
+
 ## ▶ Quick start: a new phone
 
 **In [Termux](https://f-droid.org/packages/com.termux/) (from F-Droid), three lines:**
@@ -26,24 +33,29 @@ that's Termux, not mobilize. Run `termux-change-repo` (pick a mirror group near 
 `pkg upgrade`, then the three lines again. Termux is a rolling release: a long-unused install needs
 upgrading before it installs anything.
 
-**Status: 0.6.1, testing.** `mobilize init`, `check`, `stations` and `-e` work and are tested (pytest, in
-a fake home folder). `check --hooks` (the hook pre-test) since 0.2.0; `hooks` (each station's chosen hooks) since 0.3.0; since 0.5.0 the Termux launcher restarts tw-web when it dies, and opening Termux starts it; since 0.6.0 `mobilize android` walks through the phone's own settings. This
-README also keeps what was learned setting up the first phone by hand (2026-10-21).
+**Status: 0.6.1, in daily use on one phone** (`s5`, since 2026-10-22). Commands: `init`, `check`
+(`--hooks`: the hook pre-test), `hooks` (each station's chosen hooks), `android` (the phone's own
+settings, step by step), `stations`, `-e`; tested with pytest in a fake home folder. The Termux launcher
+restarts tw-web when it dies, and opening Termux starts it. This README also keeps what was learned
+setting up the first phone (2026-10-21/22): "Problems found" is the record.
 
 ## TL;DR
 
 - A station is a device with its own copy of `~/.task`, cloned from your gittw remote. Today: `yoga`
   (laptop, `desktop`) and `s5` (phone, `mobile`).
-- **Sync often, see the others, resolve the rare collision.** Stations sync automatically when online;
-  tw-web's Sync advisory shows incoming changes and when each station last synced; a merge driver for
-  the task data resolves a collision per task, last write wins. All of that lives in gittw (planned).
+- **Sync often, see the others, resolve the rare collision.** tw-web syncs automatically when online
+  (shortly after a change, and every 15 minutes); its Sync dialog shows incoming changes and when each
+  station last synced; gittw's merge driver resolves a collision per task, last write wins, and retries a
+  pull or push the phone's network drops.
 - **Shared config, local differences:** `~/.taskrc` is a symlink to the tracked `~/.task/.taskrc`, which
   ends with `include ~/.task/local.rc`. `local.rc` is untracked and holds what this station is.
 - **Each station chooses its hooks:** `mobilize hooks --set need-priority,time-defaults,gittw` writes
   `mobilize.hooks`, `hooks.location` and `hooks = on` into `local.rc`, and builds `~/.task/hooks.d/<station>/`
   (links to just those apps' hooks; gitignored) for 2.6.2's `hooks.location`. `mobilize hooks` rebuilds it
   after a pull brings new hooks, `--all` goes back to every hook, and `check --hooks` tests the chosen set.
-  (Marks in the hooks themselves, `# tw-platforms: desktop mobile`, may come later.)
+  An app installed on one station is installed on all (it's in the shared `~/.task`); `tw -l` marks
+  `[~]` one whose hooks this station doesn't run, and `platforms=` in an app's `.meta` notes one that
+  needs a desktop (tw 2.18.0).
 - `mobilize init` does the setup, `mobilize check` finds what has drifted, `mobilize -e` edits
   `mobilize.rc` (`-e local`: this station's `local.rc`).
 - **Taskwarrior 3.x gets a loud warning, not a refusal:** nothing here is tested with it, but nothing
@@ -56,7 +68,7 @@ README also keeps what was learned setting up the first phone by hand (2026-10-2
 | `task` 2.6.2 | Linux: the distro. Termux: `task2_2.6.2-3_aarch64.deb` from gittw | Termux's own `taskwarrior` package is 3.x: never install it. The deb is repackaged as `task2`, conflicting with it |
 | `~/.task` | `git clone` of your gittw remote | data, config, `hooks/`, `scripts/` (with exec bits), themes |
 | `~/.taskrc` | symlink to `.task/.taskrc` | the shared config |
-| `~/.task/local.rc` | written per station, untracked | `gittw.device`, `tw.platforms`, `hooks=off` until hooks are tested, `hooks.location` later |
+| `~/.task/local.rc` | written per station, untracked | `gittw.device`, `tw.platforms`, `hooks=off` until hooks are tested, then `mobilize.hooks` and `hooks.location` (`mobilize hooks --set`) |
 | `PATH` | `~/.bashrc`: `export PATH="$HOME/.task/scripts:$PATH"` | gives `tw`, `gittw`, the fleet scripts |
 | tw-web | `git clone` of tw-web, `pip install -r requirements.txt`, `python app.py` | serves `localhost:5000` only; open it in the browser and install it as an app |
 | Launcher | `~/.shortcuts/tw-web` (Termux) | starts tw-web in a restart loop, then opens the browser; `--start` only starts it |
@@ -150,11 +162,16 @@ run it, so it comes back by itself (`pkg install termux-services`, then `pkill -
 its log is then in `$PREFIX/var/log/sv/sshd/current`.
 
 **Keeping ssh reachable** (it dropped every few minutes on `s5`):
+- **Tailscale on the phone** (the Tailscale app, signed in to the same tailnet): `ssh` to its tailnet
+  name or 100.x address works on any network, wifi or mobile data, with no router settings. On mobile
+  data the traffic may go through a Tailscale relay, and the phone's network still drops a connection
+  now and then. On the same wifi only:
 - Settings → Wi-Fi → ⋮ / Configure → Advanced → **Keep Wi-Fi on during sleep: Always**
   (Huawei's default turns wifi off with the screen).
 - **Wi-Fi+ off** (Huawei; others call it "Adaptive Wi-Fi" or "Switch to mobile data"): it moves the
   phone to mobile data, and its wifi address is gone.
-- A fixed address for the phone in your router (a DHCP reservation), so `ssh <phone>` finds it.
+- A fixed address for the phone in your router (a DHCP reservation), so `ssh <phone>` finds it
+  (not needed with Tailscale).
 - Termux holds a wake lock while tw-web runs (the launcher takes it), which keeps sshd from sleeping too. If you use
 termux-services (`sv-enable sshd`) instead, don't also start it by hand: the hand-started one
 holds port 8022 and the service fails every second ("Address already in use"), and in an ssh
@@ -197,13 +214,10 @@ python app.py                                         # then http://localhost:50
 **Reaching the phone from another station** (the direct sync route with no internet, and how Claude Code ran step 4
 on `s5`): `pkg install openssh`, add the other station's public key to `~/.ssh/authorized_keys`, run
 `sshd` (port 8022); on the other station, a `Host s5` entry with the phone's current address and
-`Port 8022`. The address changes with the network; `termux-wake-lock` keeps Termux alive.
+`Port 8022`. The wifi address changes with the network (Tailscale's doesn't); `termux-wake-lock` keeps Termux alive.
 
 On `s5` (2026-10-21) tw-web installed with no compiler (Python 3.13, Werkzeug 3.1.9) and served the same
 104 pending tasks as `yoga`.
-
-**Until gittw's merge driver exists, don't `git push` from a second station.** Its auto-commits stay local;
-`git checkout -- pending.data completed.data` throws test writes away.
 
 ## Problems found (and what the tool must do about them)
 
@@ -218,12 +232,10 @@ On `s5` (2026-10-21) tw-web installed with no compiler (Python 3.13, Werkzeug 3.
 | `tw: command not found` | `~/.task/scripts` isn't on Termux's `PATH` | `init` adds the line to `~/.bashrc` once |
 | **The acid test (`s5`, 2026-10-22):** after moving `~/.task`, `~/.taskrc`, tw-web aside and removing `task2`, the three quick-start lines set the phone up again in one run: deb installed via `apt`, clone with both push URLs from `mobilize.rc`, `local.rc`, state files, `PATH`, tw-web (https, `~/.local/share/tw-web`, pip), launcher; tw-web served the same 104 pending tasks and stayed up after the shell closed | | `check`: 4 warnings, all dangling links (below) |
 | Three scripts point at `yoga` paths | `make-awesome.py`, `tw-sync`, `tw-web` (scripts) and `timelog` (hooks) are symlinks to `/home/<user>/dev/…` | `check` lists dangling symlinks |
-| `included.rc`/`themes.rc` had `include /home/<user>/.task/…` | installers and `theme-select.py` write absolute paths | rewritten as `~/.task/…` on `yoga`; the writers get fixed in awesome-taskwarrior. `check`: no `/home/<user>` in rc files |
-
+| `included.rc`/`themes.rc` had `include /home/<user>/.task/…` | installers and `theme-select.py` write absolute paths | rewritten as `~/.task/…` on `yoga`; the writers fixed (make-awesome 4.15.0 installers, theme-select 0.6.3, smart-nag 1.3.3). `check`: no `/home/<user>` in rc files |
 | A read changed `pending.data` on `s5` | 2.6.2 expires `until:` tasks on any command (`export` too, even with `rc.gc=off`); gc and built-in recurrence also write on reads | not a tool bug: the merge driver absorbs expiry; `gc=off` in the shared `.taskrc` with gc run at sync time keeps gc out of reads (2026-10-22). `init` configures the driver in each clone |
-
 | Fewer contexts in tw-web on `s5` (`need`, `tod`) | both are written by hooks: `context.need.read` in `need.rc` (tracked, but the hook rewrites it; the committed copy is blank) and `context.tod.read` in `tod.rc` (gitignored). With `hooks=off` nothing fills them | expected until the station runs those hooks; `check` lists contexts that are empty |
-| tw-web: "Network error: Failed to fetch", no contexts | Android stopped Termux, so the server died (its log ends 13:42); the page itself came from the service worker's cache | 0.5.0: the launcher runs it in a restart loop with the wake lock, and `~/.bashrc` starts it when Termux opens (see "Keeping tw-web running on Android"); battery "Unrestricted" is you. It happened again in the offline test of 2026-10-22, after ~10 minutes; sshd died with it. tw-web is to say "the tw-web server isn't answering" instead |
+| tw-web: "Network error: Failed to fetch", no contexts | Android stopped Termux, so the server died (its log ends 13:42); the page itself came from the service worker's cache | 0.5.0: the launcher runs it in a restart loop with the wake lock, and `~/.bashrc` starts it when Termux opens (see "Keeping tw-web running on Android"); battery "Unrestricted" is you. It happened again in the offline test of 2026-10-22, after ~10 minutes; sshd died with it. tw-web now says "the tw-web server isn't answering", with Retry and an "Open Termux" button that starts it again |
 | s5's 0.4.0 launcher kept as "edited by hand" | it named `…/bin/python` (the bootstrap's interpreter); init now computes `python3` | 0.5.1 recognises an old launcher whichever Python it names |
 | Huawei: the App launch switches weren't there | they appear only in the dialog when one app is set to manual; the top "Manage all automatically" switch sets every app to manual | "The Android side, step by step" |
 | The widget needs "Display over other apps", and EMUI's Settings search can't find it | Android 10+ blocks background activity starts; a widget tap is one | `am start … MANAGE_OVERLAY_PERMISSION -d package:com.termux` opens it (step 4) |
@@ -232,8 +244,10 @@ On `s5` (2026-10-21) tw-web installed with no compiler (Python 3.13, Werkzeug 3.
 | **Widget → tw-web, 2026-10-22 12:59:** restart loop + server up, tasks intact | | the offline test follows |
 | ssh to `s5` dropped every few minutes ("Connection reset" in the handshake, then timeouts) | wifi asleep with the screen off, and a hand-started sshd | wifi kept on during sleep, Wi-Fi+ off, sshd under termux-services ("Keeping ssh reachable") |
 | Completing a task in tw-web (widget-started): `Failed to execute '…/hooks.d/s5/on-modify_need-priority.py': No such file or directory` | Termux:Widget runs the launcher in a bare environment: no `LD_PRELOAD` (termux-exec, which makes `#!/usr/bin/env python3` work on Android) and no `~/.task/scripts` on `PATH`. Over ssh and in a Termux session both are set, so the pre-test passed. `.bashrc` can't help: the widget doesn't start bash | 0.6.0: the launcher sets both when missing; `check` reads the running server's environment and warns |
-
 | **Hook pre-test, 2026-10-22** (`mobilize check --hooks`, 25 hooks): `yoga` +0.33 s on a read with all hooks, `s5` **+4.3 s on a read and +33 s over five commands**: each Python hook costs ~0.05 s on the laptop, 0.4–0.75 s on the phone (Python start-up) | the phone needs a small hook set; tw-web's reads already run with hooks off, but every write fires the on-launch, on-add/modify and on-exit chains | choose the `mobile` set by these numbers |
+| `s5` left stopped mid-rebase, every later sync failing (2026-10-22) | `tw -u` on both stations wrote `config/.tw_manifest` with each one's absolute paths: a conflict the merge driver doesn't handle | gittw 0.3.2 undoes a conflict it can't merge and names the file; tw 2.18.0 writes the manifest with `~/.task/…` paths, so it's the same on every station |
+| Sync on `s5` failed showing only "Pulling..." | the phone's mobile network aborted the connection mid-pull ("Software caused connection abort"); tw-web showed only gittw's progress | gittw 0.3.3 retries twice; tw-web's Sync box shows the errors too |
+| `tw -l` on `s5` listed yoga's installs | it does: `~/.task` is shared, so every app's files are on both; what runs differs | tw 2.18.0 marks `[~]` what isn't at work on this station, and why |
 | `on-modify_hledger-add.py` fails every `done` in the sandbox | it checks `TW_NOINTERACT` *before* whether the task is a transaction, so under tw-web (which sets it) every completion is refused with `tw_needs_pty` | a bug in tw-hledger-add-hook (since 2026-07-11): check the trigger first |
 | `on-modify_tw2nb.py` fails on `s5` | calls `/usr/local/bin/nb` by absolute path | desktop-only (no nb on the phone) |
 | The pre-test left `__pycache__/*.pyc` in the real `scripts/` | `scripts/` is linked into the sandbox, not copied | `PYTHONDONTWRITEBYTECODE=1` in the sandbox; `~/.task` now ignores `__pycache__/` and stopped tracking two (`yoga`, 2026-10-22) |
@@ -243,9 +257,9 @@ hook's `~/.task` lookup (`Path.home()`, never a hard-coded home), tw-web's runti
 `XDG_RUNTIME_DIR` in Termux, so its `~/.cache/tw-web` fallback applies), and the Calendar's holidays and
 moon (they arrive in the clone as `config/holidays.rc` and `sky.rc`).
 
-## In the fleet (planned)
+## In the fleet
 
-tw-mobilize joins the [awesome-taskwarrior](https://github.com/linuxcaffe/awesome-taskwarrior) registry
+tw-mobilize is in the [awesome-taskwarrior](https://github.com/linuxcaffe/awesome-taskwarrior) registry
 and follows its `CONVENTIONS.md` (§7–9):
 
 - **Install:** `tw -I mobilize` (registry name `mobilize`, repo `tw-mobilize`), like `events`/`tw-events`.
@@ -310,22 +324,14 @@ everyone's path.
 | Apps you install | Termux (F-Droid), optionally Termux:Widget, a browser | none |
 | Tools that hooks call (`nb`, `hledger`) | not installed; `check` names the hooks that need them | whatever is there |
 
-**Open (2026-10-22):** command name `mobilize` or `tw-mobilize`; whether `mobilize.rc` keeps a list of
-stations (it gives live status and the direct route their addresses, but it's one more list to keep up);
-tw-web over https by default.
+**Decided (2026-10-22):** the command is `mobilize` (repo `tw-mobilize`); `mobilize.rc` keeps a commented
+list of stations; tw-web is cloned over https.
 
-## Semi-automating it: `curl` → `mobilize init`
+## What `mobilize init` does
 
-Almost all of the above can be one command. The parts that can't are the ones that need you: putting a
-key on a website, installing the app in the browser.
-
-**Bootstrap.** Two lines on a fresh Termux, download-then-run (not `curl | sh`, so you can read it first):
-
-```bash
-pkg install python git openssh
-curl -fLO https://raw.githubusercontent.com/linuxcaffe/tw-mobilize/main/mobilize.py
-python mobilize.py init --station s5 --platform mobile --data <your gittw fetch URL>
-```
+The quick start's three lines are download-then-run (not `curl | sh`, so you can read `mobilize.py`
+first). The steps that can't be automated are the ones that need you: putting a key on a website, the
+phone's own settings, installing the app in the browser.
 
 **Shape of the tool:** one Python file, standard library only (it runs before anything else is
 installed), every step **idempotent**: it checks first, says what it found, and does only what's missing,
@@ -363,8 +369,9 @@ a new laptop or desktop station is set up the same way.
 ## Not here
 
 - **Sync rules:** gittw (station-tagged commits, last-seen, housekeeping at sync, the merge driver).
-- **Hook marks:** in each hook; the registry's `.meta` may mirror them later.
-- **tw-web changes** (`termux-open` for file links, a Termux launcher): tw-web.
+- **What an app suits:** `platforms=` in its registry `.meta` (awesome-taskwarrior); `tw -l` reads it.
+- **tw-web's side** (the "server isn't answering" banner, automatic sync, `termux-open` for file links,
+  the update pill): tw-web.
 - Taskwarrior 3.x.
 
 ## License
