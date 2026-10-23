@@ -33,7 +33,7 @@ that's Termux, not mobilize. Run `termux-change-repo` (pick a mirror group near 
 `pkg upgrade`, then the three lines again. Termux is a rolling release: a long-unused install needs
 upgrading before it installs anything.
 
-**Status: 0.6.1, in daily use on one phone** (`s5`, since 2026-10-22). Commands: `init`, `check`
+**Status: 0.6.2, in daily use on one phone** (`s5`, since 2026-10-22). Commands: `init`, `check`
 (`--hooks`: the hook pre-test), `hooks` (each station's chosen hooks), `android` (the phone's own
 settings, step by step), `stations`, `-e`; tested with pytest in a fake home folder. The Termux launcher
 restarts tw-web when it dies, and opening Termux starts it. This README also keeps what was learned
@@ -87,8 +87,9 @@ Three things help; mobilize does the first two.
    is a line in `~/.cache/tw-web/server.out`.
 2. **Opening Termux starts it.** When Android kills Termux, the loop goes too. `mobilize init`
    writes a marked block to `~/.bashrc` that runs `~/.shortcuts/tw-web --start`, so opening
-   Termux (or ssh into it) brings tw-web back. It takes the wake lock only when it starts the
-   server, not in every shell. Don't want it: `mobilize.web.autostart = no` in `local.rc`, then
+   Termux (or ssh into it) brings tw-web back, and takes the wake lock again (0.6.2): Android, or
+   the notification's "Release wakelock", can drop it while tw-web runs, and then Termux and its
+   sshd sleep with the screen (s5, 2026-10-23). Don't want it: `mobilize.web.autostart = no` in `local.rc`, then
    delete the block (between the `>>> mobilize: tw-web autostart >>>` lines).
 3. **Tell Android to leave Termux alone (you):** the next section, step by step.
 

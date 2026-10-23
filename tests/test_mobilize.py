@@ -375,6 +375,19 @@ def test_launcher_gives_a_widget_started_server_termux_exec_and_the_fleet_script
     assert env['PATH'].split(':')[0] == str(launcher.scripts)
 
 
+def test_every_run_takes_the_wake_lock_again(launcher):
+    # 2026-10-23: s5's lock was gone with the server still up, so Termux and sshd slept
+    launcher.go('--start')
+    assert _wait(launcher.up)
+    launcher.go('--start')                           # already running
+    assert launcher.termux.read_text().count('termux-wake-lock') == 2
+
+
+def test_an_0_6_launcher_is_old_too():
+    d = Path('/x/tw-web')
+    assert mobilize.is_old_launcher(mobilize._launcher_text_0_6(d, '/usr/bin/python3'), d)
+
+
 def test_an_0_5_launcher_is_old_too():
     d = Path('/x/tw-web')
     assert mobilize.is_old_launcher(mobilize._launcher_text_0_5(d, '/usr/bin/python3'), d)

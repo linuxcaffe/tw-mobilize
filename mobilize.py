@@ -63,7 +63,7 @@ import sys
 import urllib.request
 from pathlib import Path
 
-__version__ = '0.6.1'
+__version__ = '0.6.2'
 
 OK, DONE, WOULD, SKIP, WARN, FAIL, YOU = 'ok', 'done', 'would', 'skip', 'warn', 'fail', 'you'
 
@@ -381,6 +381,92 @@ def launcher_text(d, py, port=WEB_PORT):
 # opening Termux starts it again (the block mobilize writes in ~/.bashrc).
 # Server output, and the loop's notes: ~/.cache/tw-web/server.out
 #
+# Every run takes Termux's wake lock, not only the one that starts the server: Android (or
+# the notification's "Release wakelock") can drop it, and then Termux and its sshd sleep
+# with the screen. Opening Termux, an ssh login or the widget takes it back.
+#
+# Started from the widget, it gets a bare environment: no LD_PRELOAD (termux-exec, which makes
+# `#!/usr/bin/env python3` work: without it every hook fails "No such file or directory") and
+# no fleet scripts on PATH (gittw). A Termux session sets both; this sets them when missing.
+if [ -z "$LD_PRELOAD" ]; then
+    for lib in {prefix}/lib/libtermux-exec-ld-preload.so {prefix}/lib/libtermux-exec.so; do
+        if [ -f "$lib" ]; then export LD_PRELOAD="$lib"; break; fi
+    done
+fi
+case ":$PATH:" in *":{scripts}:"*) ;; *) export PATH="{scripts}:$PATH" ;; esac
+port={port}
+run=${{XDG_RUNTIME_DIR:+$XDG_RUNTIME_DIR/tw-web}}
+run=${{run:-$HOME/.cache/tw-web}}
+pidf=$run/tw-web.pid
+loopf=$run/tw-web.loop
+log=$HOME/.cache/tw-web/server.out
+
+up() {{ curl -s -o /dev/null --max-time 2 http://127.0.0.1:$port/; }}
+looping() {{ [ -f "$loopf" ] && kill -0 "$(cat "$loopf")" 2>/dev/null; }}
+note() {{ echo "$(date '+%F %T') mobilize: $*" >> "$log"; }}
+
+if [ "$1" = --loop ]; then
+    echo $$ > "$loopf"
+    cd "{d}" || exit 1
+    fails=0
+    while :; do
+        t0=$(date +%s)
+        "{py}" app.py >> "$log" 2>&1 &
+        echo $! > "$pidf"
+        wait $!
+        code=$?
+        # tw-web's Stop removes the PID file; SIGTERM/SIGINT mean someone stopped it
+        if [ ! -f "$pidf" ] || [ $code -eq 0 ] || [ $code -eq 130 ] || [ $code -eq 143 ]; then
+            note "tw-web stopped (exit $code): not restarting"
+            break
+        fi
+        if [ $(( $(date +%s) - t0 )) -lt 30 ]; then fails=$((fails + 1)); else fails=0; fi
+        if [ $fails -ge 5 ]; then
+            note "tw-web failed 5 times in a row (exit $code): giving up, see above"
+            break
+        fi
+        note "tw-web died (exit $code): starting it again"
+        sleep 2
+    done
+    rm -f "$pidf" "$loopf"
+    termux-wake-unlock 2>/dev/null
+    exit 0
+fi
+
+termux-wake-lock 2>/dev/null
+if ! up && ! looping; then
+    mkdir -p "$run" "${{log%/*}}"
+    note "starting tw-web"
+    nohup sh "$0" --loop > /dev/null 2>&1 &
+    [ -t 1 ] && echo "tw-web: starting on http://localhost:$port/"
+    [ "$1" = --start ] && exit 0
+    i=0
+    while [ $i -lt 30 ] && ! up; do sleep 0.5; i=$((i + 1)); done
+fi
+[ "$1" = --start ] && exit 0
+termux-open-url http://localhost:$port/
+"""
+
+
+def _launcher_text_0_6(d, py, port=WEB_PORT):
+    """The launcher mobilize 0.6.x wrote (the wake lock taken only when it started the server)."""
+    prefix = os.environ.get('PREFIX', '/data/data/com.termux/files/usr')
+    scripts = task_dir() / 'scripts'
+    return f"""\
+#!{prefix}/bin/sh
+# tw-web: start the server if it isn't running, then open it in the browser.
+# Written by `mobilize init`, which replaces it when a newer mobilize writes it
+# differently (unless you've edited it). Termux:Widget shows it on the home screen.
+#
+#   ~/.shortcuts/tw-web           start tw-web if needed, then open it in the browser
+#   ~/.shortcuts/tw-web --start   start tw-web if needed, nothing else (~/.bashrc runs this)
+#
+# The server runs in a loop that starts it again when it dies: a crash, or Android
+# stopping it. Not when it was stopped on purpose (Settings → Stop server, Ctrl-C, kill),
+# and not after 5 quick failures in a row. Android can also stop the loop itself; then
+# opening Termux starts it again (the block mobilize writes in ~/.bashrc).
+# Server output, and the loop's notes: ~/.cache/tw-web/server.out
+#
 # Started from the widget, it gets a bare environment: no LD_PRELOAD (termux-exec, which makes
 # `#!/usr/bin/env python3` work: without it every hook fails "No such file or directory") and
 # no fleet scripts on PATH (gittw). A Termux session sets both; this sets them when missing.
@@ -536,7 +622,7 @@ termux-open-url http://localhost:{port}/
 def is_old_launcher(text, d):
     """True when text is a launcher an older mobilize wrote for tw-web in d, whichever Python it named."""
     marker = '\x00PY\x00'
-    for older in (_launcher_text_0_4, _launcher_text_0_5):
+    for older in (_launcher_text_0_4, _launcher_text_0_5, _launcher_text_0_6):
         pattern = re.escape(older(d, marker)).replace(re.escape(marker), r'\S+')
         if re.fullmatch(pattern, text):
             return True
