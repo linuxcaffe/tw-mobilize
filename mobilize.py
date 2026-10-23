@@ -11,7 +11,7 @@ Commands
                                   Taskwarrior 2.6.2, an SSH key, the clone of your
                                   gittw repo and where it pushes, ~/.taskrc, local.rc,
                                   missing state files, PATH, mobilize.rc, tw-web and
-                                  (Termux) a launcher. Each step looks first and does
+                                  (Termux) a launcher, and nb's quick-note buttons. Each step looks first and does
                                   only what's missing, so it's safe to run again.
                                   Nothing is deleted: what's in the way is moved
                                   aside (*.pre-mobilize-<time>). Ends with `check`.
@@ -63,7 +63,7 @@ import sys
 import urllib.request
 from pathlib import Path
 
-__version__ = '0.6.3'
+__version__ = '0.7.0'
 
 OK, DONE, WOULD, SKIP, WARN, FAIL, YOU = 'ok', 'done', 'would', 'skip', 'warn', 'fail', 'you'
 
@@ -677,6 +677,87 @@ def with_autostart(text):
     return text + ('' if not text or text.endswith('\n') else '\n') + '\n' + autostart_block()
 
 
+# ── nb quick notes (Termux) ───────────────────────────────────────────────────
+# nb (npm install -g nb.sh) works from Termux's command line; these give it home-screen buttons.
+# nb's own `#!/usr/bin/env bash` needs termux-exec, which a widget-started script lacks, so each
+# runs nb with bash directly. nb add reads a piped stdin as the note, hence nb-quick's </dev/null.
+
+NB_NOTE_TEXT = r'''#!/data/data/com.termux/files/usr/bin/sh
+# nb-note: a quick nb note from the home screen (Termux:Widget opens it in a terminal).
+# Asks for a title, which becomes the filename ("Buy milk" -> buy_milk.md; empty -> a
+# timestamp name), then one line of text: type it and the note is saved at once, or
+# leave it empty to write the note in nano. nb commits it either way.
+# Written by `mobilize init`, which leaves it alone once it's edited.
+#
+# Started from the widget, it gets a bare environment, where nb's `#!/usr/bin/env bash`
+# line can fail ("nb: not found"), so run it with bash directly.
+nb() { bash /data/data/com.termux/files/usr/bin/nb "$@"; }
+export EDITOR="${EDITOR:-nano}"
+
+printf "Title: "; read -r title
+printf "Text (empty = open editor): "; read -r text
+set --
+[ -n "$title" ] && set -- --title "$title"
+if [ -n "$text" ]; then nb add "$@" --content "$text"; else nb add "$@"; fi
+printf "\nPress Enter to close. "; read -r _
+'''
+
+NB_QUICK_TEXT = r'''#!/data/data/com.termux/files/usr/bin/bash
+# nb-quick: a new nb note through Android popups, no terminal (Termux:Widget runs
+# ~/.shortcuts/tasks/* in the background). Asks for a title, which becomes the filename
+# ("Buy milk" -> buy_milk.md; blank -> a timestamp name), then the note text. nb commits it,
+# and a toast says how it went. Cancel either popup and nothing is saved.
+# Written by `mobilize init`, which leaves it alone once it's edited.
+#
+#   nb-quick          ask for title and text
+#   nb-quick TEXT     ask for the title only, TEXT is the note (~/bin/termux-url-opener
+#                     passes what was shared to Termux)
+P=/data/data/com.termux/files/usr/bin
+# The widget gives a bare environment, where nb's `#!/usr/bin/env bash` can fail.
+nb() { bash "$P/nb" "$@"; }
+# termux-dialog prints JSON: {"code": -1 (OK) or -2 (cancel), "text": "..."}
+ask() {
+    "$P/termux-dialog" text "$@" | "$P/python3" -c "import json, sys
+d = json.load(sys.stdin)
+if d.get(\"code\") != -1: sys.exit(1)
+print(d.get(\"text\", \"\"))"
+}
+
+title=$(ask -t "New nb note" -i "Title (blank: timestamp name)") || exit 0
+if [ -n "$1" ]; then
+    text=$1
+else
+    text=$(ask -m -t "${title:-New note}" -i "Note") || exit 0
+fi
+if [ -z "$title$text" ]; then "$P/termux-toast" "nb: empty, nothing saved"; exit 0; fi
+
+args=()
+[ -n "$title" ] && args+=(--title "$title")
+[ -n "$text" ] && args+=(--content "$text")
+if out=$(nb add --no-color "${args[@]}" </dev/null 2>&1); then
+    "$P/termux-toast" "nb: ${out#Added: }"
+else
+    "$P/termux-toast" -b red "nb add failed: $(printf %s "$out" | tail -n 2)"
+fi
+'''
+
+URL_OPENER_TEXT = r'''#!/data/data/com.termux/files/usr/bin/bash
+# Android Share -> Termux runs this with the shared text or URL as $1: save it as an nb
+# note (nb-quick asks for a title). Shared URLs become plain notes, not nb bookmarks,
+# which would need the network to fetch the page.
+# Written by `mobilize init`, which leaves it alone once it's edited.
+exec "$HOME/.shortcuts/tasks/nb-quick" "$1"
+'''
+
+
+def nb_scripts():
+    """The nb quick-note scripts init writes on Termux: path -> text."""
+    home = Path.home()
+    return {home / '.shortcuts' / 'nb-note': NB_NOTE_TEXT,
+            home / '.shortcuts' / 'tasks' / 'nb-quick': NB_QUICK_TEXT,
+            home / 'bin' / 'termux-url-opener': URL_OPENER_TEXT}
+
+
 # ── init ──────────────────────────────────────────────────────────────────────
 
 class Init:
@@ -1146,11 +1227,36 @@ class Init:
                                      + (' (block rewritten)' if state else ''),
                         lambda: bashrc.write_text(with_autostart(text)))
 
+    def step_nb(self):
+        """nb's quick-note buttons, once nb is installed: nb-note (a terminal), nb-quick
+        (Android popups, no terminal) and Share -> Termux."""
+        if not is_termux():
+            self.note(SKIP, 'nb', 'Termux only')
+            return True
+        if not shutil.which('nb'):
+            self.note(SKIP, 'nb', 'nb not installed (npm install -g nb.sh, then init again)')
+            return True
+        for path, text in nb_scripts().items():
+            if path.exists():
+                if path.read_text(errors='replace') == text:
+                    self.note(OK, 'nb', f'{path}')
+                else:
+                    self.note(WARN, 'nb', f'{path} (not the one mobilize writes: left as it is)')
+                continue
+            def write(path=path, text=text):
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(text)
+                path.chmod(0o755)
+            self.act('nb', f'{path}', write)
+        if not shutil.which('termux-dialog'):
+            self.note(YOU, 'nb', "nb-quick's popups need Termux:API: pkg install termux-api")
+        return True
+
     def run(self):
         steps = [self.step_identity, self.step_packages, self.step_task, self.step_key, self.step_clone,
                  self.step_push, self.step_git_identity, self.step_merge_driver, self.step_taskrc, self.step_local_rc, self.step_state_files, self.step_hooks, self.step_path,
                  self.step_mobilize_rc, self.step_commit, self.step_web, self.step_launcher,
-                 self.step_icon, self.step_autostart]
+                 self.step_icon, self.step_autostart, self.step_nb]
         self.out(f'mobilize init{" (dry run: nothing changes)" if self.dry else ""}')
         for step in steps:
             try:

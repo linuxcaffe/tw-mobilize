@@ -478,6 +478,51 @@ def test_init_replaces_the_launcher_without_touching_the_file_a_running_loop_rea
     running.close()
 
 
+def _termux_init(notes):
+    init = mobilize.Init.__new__(mobilize.Init)
+    init.dry, init.web, init.worst, init.out = False, True, mobilize.OK, lambda *a: None
+    init.note = lambda status, step, detail: notes.append((status, detail))
+    init.act = lambda step, detail, fn: (fn(), True)[1]
+    return init
+
+
+def test_init_on_termux_gives_nb_its_quick_note_buttons_once_nb_is_installed(home, tmp_path, monkeypatch):
+    monkeypatch.setenv('TERMUX_VERSION', '0.118')
+    bin_ = tmp_path / 'bin'
+    bin_.mkdir()
+    monkeypatch.setenv('PATH', str(bin_))
+    notes = []
+    init = _termux_init(notes)
+    scripts = mobilize.nb_scripts()
+    assert init.step_nb() and not any(p.exists() for p in scripts), 'no nb: nothing written'
+    assert notes[-1][0] == mobilize.SKIP
+
+    for tool in ('nb', 'termux-dialog'):
+        (bin_ / tool).write_text('#!/bin/sh\n')
+        (bin_ / tool).chmod(0o755)
+    notes.clear()
+    assert init.step_nb()
+    for path, text in scripts.items():
+        assert path.read_text() == text and os.access(path, os.X_OK)
+    assert not any(s == mobilize.YOU for s, _ in notes), 'termux-dialog is there'
+
+    mine = home / 'bin' / 'termux-url-opener'
+    mine.write_text('#!/bin/sh\necho my own opener\n')
+    (bin_ / 'termux-dialog').unlink()
+    notes.clear()
+    assert init.step_nb()
+    assert mine.read_text() == '#!/bin/sh\necho my own opener\n', 'one edited by hand is left alone'
+    assert [s for s, _ in notes] == [mobilize.OK, mobilize.OK, mobilize.WARN, mobilize.YOU]
+    assert 'termux-api' in notes[-1][1]
+
+
+def test_nb_scripts_are_valid_shell():
+    for path, text in mobilize.nb_scripts().items():
+        shell = 'bash' if text.startswith('#!/data/data/com.termux/files/usr/bin/bash') else 'sh'
+        r = subprocess.run([shell, '-n'], input=text, capture_output=True, text=True)
+        assert r.returncode == 0, f'{path.name}: {r.stderr}'
+
+
 def test_ssh_urls():
     assert mobilize.is_ssh_url('git@codeberg.org:me/data.git')
     assert mobilize.is_ssh_url('ssh://git@host:22/x.git')
