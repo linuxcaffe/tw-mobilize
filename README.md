@@ -33,7 +33,7 @@ that's Termux, not mobilize. Run `termux-change-repo` (pick a mirror group near 
 `pkg upgrade`, then the three lines again. Termux is a rolling release: a long-unused install needs
 upgrading before it installs anything.
 
-**Status: 0.6.2, in daily use on one phone** (`s5`, since 2026-10-22). Commands: `init`, `check`
+**Status: 0.6.3, in daily use on one phone** (`s5`, since 2026-10-22). Commands: `init`, `check`
 (`--hooks`: the hook pre-test), `hooks` (each station's chosen hooks), `android` (the phone's own
 settings, step by step), `stations`, `-e`; tested with pytest in a fake home folder. The Termux launcher
 restarts tw-web when it dies, and opening Termux starts it. This README also keeps what was learned

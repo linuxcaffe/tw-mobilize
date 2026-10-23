@@ -454,6 +454,30 @@ def test_init_on_termux_writes_the_autostart_block_and_replaces_an_old_launcher(
     assert not mobilize.autostart_wanted()
 
 
+def test_init_replaces_the_launcher_without_touching_the_file_a_running_loop_reads(home, remote, monkeypatch):
+    # 2026-10-23: init rewrote ~/.shortcuts/tw-web in place under s5's running `sh … --loop`; sh reads
+    # its script as it goes, so when the loop ended it would read on in the new text. A new file
+    # renamed over the old leaves the running shell its own copy.
+    monkeypatch.setenv('TERMUX_VERSION', '0.118')
+    web = home / 'tw-web'
+    web.mkdir()
+    (web / 'app.py').write_text('')
+    shortcut = home / '.shortcuts' / 'tw-web'
+    shortcut.parent.mkdir()
+    shortcut.write_text(mobilize._launcher_text_0_6(web, mobilize.web_python(web)))
+    running = open(shortcut)                         # what the loop's sh holds open
+    monkeypatch.setattr(mobilize, 'web_dir', lambda s=None: web)
+    init = mobilize.Init.__new__(mobilize.Init)
+    init.dry, init.web, init.worst, init.out = False, True, mobilize.OK, lambda *a: None
+    init.note = lambda status, step, detail: None
+    init.act = lambda step, detail, fn: (fn(), True)[1]
+    assert init.step_launcher()
+    assert shortcut.read_text() == mobilize.launcher_text(web, mobilize.web_python(web))
+    assert running.read() == mobilize._launcher_text_0_6(web, mobilize.web_python(web))
+    assert os.access(shortcut, os.X_OK)
+    running.close()
+
+
 def test_ssh_urls():
     assert mobilize.is_ssh_url('git@codeberg.org:me/data.git')
     assert mobilize.is_ssh_url('ssh://git@host:22/x.git')

@@ -63,7 +63,7 @@ import sys
 import urllib.request
 from pathlib import Path
 
-__version__ = '0.6.2'
+__version__ = '0.6.3'
 
 OK, DONE, WOULD, SKIP, WARN, FAIL, YOU = 'ok', 'done', 'would', 'skip', 'warn', 'fail', 'you'
 
@@ -1090,9 +1090,13 @@ class Init:
         path = Path.home() / '.shortcuts' / 'tw-web'
         text = launcher_text(d, web_python(d))
         def write():
+            # a new file renamed over the old: a running `sh … --loop` reads its script as it goes,
+            # and must keep reading the copy it started with (0.6.3)
             path.parent.mkdir(exist_ok=True)
-            path.write_text(text)
-            path.chmod(0o755)
+            new = path.with_name(path.name + '.new')
+            new.write_text(text)
+            new.chmod(0o755)
+            os.replace(new, path)
         if path.exists():
             have = path.read_text()
             if have == text:
