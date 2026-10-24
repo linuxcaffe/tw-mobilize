@@ -567,6 +567,43 @@ def test_hledger_web_launcher_is_valid_shell():
     assert f'port={mobilize.HLEDGER_WEB_PORT}' in mobilize.HLEDGER_WEB_TEXT
 
 
+def test_init_on_termux_gives_t_its_quick_button_once_t_is_there(home, tmp_path, monkeypatch):
+    monkeypatch.setenv('TERMUX_VERSION', '0.118')
+    bin_ = tmp_path / 'bin'
+    bin_.mkdir()
+    monkeypatch.setenv('PATH', str(bin_))
+    notes = []
+    init = _termux_init(notes)
+    script = home / '.shortcuts' / 'tasks' / 't-quick'
+    icons = home / '.shortcuts' / 'icons'
+    assert init.step_t_quick() and not script.exists(), 'no t: nothing written'
+    assert notes[-1][0] == mobilize.SKIP
+
+    t = home / '.task' / 'scripts' / 't'
+    t.parent.mkdir(parents=True, exist_ok=True)
+    t.write_text('#!/bin/sh\n')
+    notes.clear()
+    assert init.step_t_quick()
+    assert script.read_text() == mobilize.T_QUICK_TEXT and os.access(script, os.X_OK)
+    for name in ('.t-quick-in.png', '.t-quick-out.png', 't-quick.png'):
+        assert (icons / name).read_bytes().startswith(b'\x89PNG\r\n\x1a\n'), name
+    assert (icons / 't-quick.png').read_bytes() == (icons / '.t-quick-out.png').read_bytes(), 'starts red'
+    assert notes[-1][0] == mobilize.YOU and 'termux-api' in notes[-1][1]
+
+    script.write_text('#!/bin/sh\necho mine\n')
+    (bin_ / 'termux-dialog').write_text('#!/bin/sh\n')
+    (bin_ / 'termux-dialog').chmod(0o755)
+    notes.clear()
+    assert init.step_t_quick()
+    assert script.read_text() == '#!/bin/sh\necho mine\n', 'one edited by hand is left alone'
+    assert [s for s, _ in notes] == [mobilize.WARN, mobilize.OK, mobilize.OK, mobilize.OK]
+
+
+def test_t_quick_is_valid_bash():
+    r = subprocess.run(['bash', '-n'], input=mobilize.T_QUICK_TEXT, capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+
+
 def test_ssh_urls():
     assert mobilize.is_ssh_url('git@codeberg.org:me/data.git')
     assert mobilize.is_ssh_url('ssh://git@host:22/x.git')

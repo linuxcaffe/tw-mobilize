@@ -33,11 +33,11 @@ that's Termux, not mobilize. Run `termux-change-repo` (pick a mirror group near 
 `pkg upgrade`, then the three lines again. Termux is a rolling release: a long-unused install needs
 upgrading before it installs anything.
 
-**Status: 0.7.2, in daily use on one phone** (`s5`, since 2026-10-22). Commands: `init`, `check`
+**Status: 0.8.0, in daily use on one phone** (`s5`, since 2026-10-22). Commands: `init`, `check`
 (`--hooks`: the hook pre-test), `hooks` (each station's chosen hooks), `android` (the phone's own
 settings, step by step), `stations`, `-e`; tested with pytest in a fake home folder. The Termux launcher
 restarts tw-web when it dies, and opening Termux starts it. With nb installed, `init` also adds
-home-screen buttons for quick nb notes (0.7.0), and with hledger-web installed, a button for it (0.7.2). This README also keeps what was learned
+home-screen buttons for quick nb notes (0.7.0), and with hledger-web installed, a button for it (0.7.2); and t-quick clocks in and out of the timelog (0.8.0). This README also keeps what was learned
 setting up the first phone (2026-10-21/22): "Problems found" is the record.
 
 ## TL;DR
@@ -76,6 +76,7 @@ setting up the first phone (2026-10-21/22): "Problems found" is the record.
 | Autostart | a marked block in `~/.bashrc` (Termux) | opening Termux starts tw-web if it isn't running |
 | nb quick notes | `~/.shortcuts/nb-note`, `~/.shortcuts/tasks/nb-quick`, `~/bin/termux-url-opener` (Termux, once `nb` is installed) | home-screen buttons for [nb](https://github.com/xwmx/nb) (`npm install -g nb.sh`): `nb-note` asks in a terminal, `nb-quick` in Android popups (`pkg install termux-api`), and Share → Termux saves what was shared. The title becomes the filename, so a file browser shows real names. nb's logo is their widget icon (`~/.shortcuts/icons/`) |
 | hledger-web button | `~/.shortcuts/hledger-web` (Termux, once hledger-web is installed) | mobilize doesn't install hledger-web: Termux's `hledger` is CLI only, and Debian trixie dropped hledger-web, so today it comes from a proot-distro Debian switched to sid (`apt install hledger-web`); a native one on Termux's PATH is used first. Serves `localhost:5050` (tw-web has 5000) on `$LEDGER_FILE` or `~/.hledger.journal`, with Termux's home bound into Debian at the same path; `--start`, `--stop`. hledger's logo is its widget icon |
+| t-quick | `~/.shortcuts/tasks/t-quick` (Termux, once `~/.task/scripts/t` is there) | the timelog ([t](https://github.com/linuxcaffe/t)) in Android popups, no terminal: one list to clock in to a recent account (or a new one), or, while in, to clock out (with a note), comment or switch. While you're in, an ongoing notification shows the account and start time, with Out and Menu buttons; a toast says what t did. The icon is a green or red t (`icons/t-quick.png`, swapped from `.t-quick-in.png`/`.t-quick-out.png`), but Termux:Widget only redraws it with the widget, so the notification is the live status. `t-quick --refresh` syncs both after a `t in`/`t out` in a shell. Needs `termux-api` |
 
 ## Keeping tw-web running on Android
 
@@ -359,6 +360,7 @@ remote is an argument, so the repo can be public.
 | Autostart | yes: a marked block in `~/.bashrc`, so opening Termux starts tw-web (`mobilize.web.autostart = no` leaves it out) |
 | nb quick notes | yes, once `nb` is installed: three scripts and nb's logo as their icons (see "The pieces"); a script that's there and different, say your own `termux-url-opener`, is left as it is. `termux-api` for the popups is **you** |
 | hledger-web button | yes, once hledger-web is installed: the launcher and hledger's logo as its icon; one that's there and different is left as it is. Installing hledger-web is **you** |
+| t-quick | yes, once `t` is in `~/.task/scripts`: the script and its three icons; an edited script is left as it is. `termux-api` is **you** |
 | Install tw-web as a browser app | **you**: it opens `http://localhost:5000` with `termux-open-url` |
 | Commit the shared files it changed (`mobilize.rc`, its include), together; never push | yes |
 | Final `check` | yes |

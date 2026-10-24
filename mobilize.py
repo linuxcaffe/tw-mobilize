@@ -64,7 +64,7 @@ import sys
 import urllib.request
 from pathlib import Path
 
-__version__ = '0.7.2'
+__version__ = '0.8.0'
 
 OK, DONE, WOULD, SKIP, WARN, FAIL, YOU = 'ok', 'done', 'would', 'skip', 'warn', 'fail', 'you'
 
@@ -1102,6 +1102,166 @@ def hledger_icon():
     return base64.b64decode(HLEDGER_ICON_PNG)
 
 
+# ── t-quick: the timelog from the home screen (Termux) ────────────────────────
+# t (~/.task/scripts/t, from the shared ~/.task) clocks in and out of a timeclock file; t-quick
+# gives it one-tap Android popups. Status shows as an ongoing notification while you're in
+# (Termux:Widget icons only redraw when the widget does, so the green/red icon lags).
+
+T_QUICK_TEXT = r'''#!/data/data/com.termux/files/usr/bin/bash
+# t-quick: clock in and out of the timelog (t, ~/.task/scripts/t) through Android popups, no
+# terminal (Termux:Widget runs ~/.shortcuts/tasks/* in the background). One tap, one list:
+#   out: your recent accounts (most recent first) to clock in to, or Other... for a new one
+#        ("account description", like `t in`)
+#   in:  Clock out, Clock out with a note..., Comment..., or another account to switch to
+# While you're in, an ongoing notification says so (account, since when) with Out and Menu
+# buttons; clocking out removes it. The widget icon turns green (in) or red (out), shown the
+# next time the widget redraws. A toast says what t did. Written by `mobilize init`, which
+# leaves it alone once it's edited.
+#
+#   t-quick             the menu
+#   t-quick out         clock out (the notification's Out button)
+#   t-quick --refresh   bring the notification and icon in line with t (say after `t in` in a shell)
+P=/data/data/com.termux/files/usr/bin
+export PATH="$P:$PATH"
+T=$HOME/.task/scripts/t
+SELF=$HOME/.shortcuts/tasks/t-quick
+ICONS=$HOME/.shortcuts/icons
+
+# t's own `#!/usr/bin/env bash` can fail in the widget's bare environment; no stdin (t's
+# prompts take the default), no colours
+t() { "$P/bash" "$T" "$@" </dev/null 2>&1 | sed 's/\x1b\[[0-9;]*m//g'; }
+toast() { "$P/termux-toast" "$@"; }
+# termux-dialog prints JSON: {"code": -1 (OK) or -2 (cancel), "text": "..."}; a sheet gives
+# the chosen item as text
+dialog() {
+    "$P/termux-dialog" "$@" | "$P/python3" -c "import json, sys
+d = json.load(sys.stdin)
+if d.get(\"code\") == -2 or not d.get(\"text\"): sys.exit(1)
+print(d[\"text\"])"
+}
+
+# t's status: "IN  acct  desc" + "    since 18:26:24  (1h20m elapsed)", or "OUT  last: acct  at …"
+read_status() {
+    local status; status=$(t)
+    state=${status%% *}
+    account=$(printf '%s\n' "$status" | head -1 | awk '$1 == "IN" {print $2} $1 == "OUT" {print $3}')
+    [ "$state" = IN ] || state=OUT   # "No timelog entries": no file yet (t in creates it)
+    since=$(printf '%s\n' "$status" | sed -n 2p | awk '{print substr($2, 1, 5)}')   # HH:MM
+}
+read_status
+file=$(t version | sed -n 's/^\(file\|timelog\): *//p' | head -1)
+recent() { grep '^i ' "$file" 2>/dev/null | awk '{print $4}' | tac | awk '!seen[$0]++' | head -n 7; }
+
+refresh() {
+    read_status
+    if [ "$state" = IN ]; then
+        "$P/termux-notification" -i t-quick --ongoing --alert-once --priority low --icon timer \
+            -t "IN  $account" -c "since $since" \
+            --action "$P/bash $SELF" \
+            --button1 Out --button1-action "$P/bash $SELF out" \
+            --button2 Menu --button2-action "$P/bash $SELF"
+        cp -f "$ICONS/.t-quick-in.png" "$ICONS/t-quick.png" 2>/dev/null
+    else
+        "$P/termux-notification-remove" t-quick
+        cp -f "$ICONS/.t-quick-out.png" "$ICONS/t-quick.png" 2>/dev/null
+    fi
+}
+
+# do_t: run t, toast its first line (red when it failed), then refresh
+do_t() {
+    local out
+    if out=$(t "$@") && ! printf '%s' "$out" | grep -qi '^\(not clocked\|specify\|usage\)'; then
+        toast "$(printf '%s\n' "$out" | grep -v '^$' | tail -n 1)"
+    else
+        toast -b red "t $1: $(printf '%s\n' "$out" | grep -v '^$' | tail -n 1)"
+    fi
+}
+
+clock_in() {   # "account description..."
+    local acct=${1%% *} desc=""
+    [ "$acct" != "$1" ] && desc=${1#* }
+    [ "$state" = IN ] && t out >/dev/null
+    do_t in "$acct" "$desc"
+}
+
+case "$1" in
+    --refresh) refresh; exit 0 ;;
+    out) do_t out; refresh; exit 0 ;;
+esac
+
+OTHER="Other account..."
+if [ "$state" = IN ]; then
+    items="Clock out,Clock out with a note...,Comment..."
+    for a in $(recent); do [ "$a" != "$account" ] && items+=",→ $a"; done
+    items+=",→ $OTHER"
+    pick=$(dialog sheet -t "IN  $account, since $since" -v "$items") || { refresh; exit 0; }
+else
+    items=""
+    for a in $(recent); do items+="${items:+,}$a"; done
+    items+="${items:+,}$OTHER"
+    pick=$(dialog sheet -t "OUT  (last: ${account:-none})" -v "$items") || { refresh; exit 0; }
+fi
+pick=${pick#→ }
+
+case "$pick" in
+    "Clock out") do_t out ;;
+    "Clock out with a note...")
+        note=$(dialog text -t "Clock out of $account" -i "Note") || exit 0
+        do_t out "$note" ;;
+    "Comment...")
+        note=$(dialog text -t "Comment ($account)" -i "Comment") || exit 0
+        [ -n "$note" ] && do_t comment "$note" ;;
+    "$OTHER")
+        new=$(dialog text -t "Clock in" -i "account:sub description") || exit 0
+        [ -n "$new" ] && clock_in "$new" ;;
+    *) clock_in "$pick" ;;
+esac
+refresh
+'''
+
+# t-quick's icons: a white t on green (in) or red (out). t-quick copies one over
+# icons/t-quick.png as the state changes; the two masters sit beside it as dotfiles.
+T_ICON_IN_PNG = (
+    'iVBORw0KGgoAAAANSUhEUgAAAMAAAADACAMAAABlApw1AAAASFBMVEVHcEwunk8unk8unk8unk8unk8unk8unk8unk8unk8unk8u'
+    'nk8unk8unk////9ru4L8/v3J59KXz6hNrGlVsHDk8+mv27x2wIy0PzxFAAAADXRSTlMA7hZpjUG9CVEroNPZzf+8xwAABFlJREFU'
+    'eNrtndmS4yAMRQGz2lG3O2kn//+nU7PV1HTZiRdJcLt8H/PECQLJAiRjTp06derbKbmSO9/HwVoisnaIve9ycQlg6CX7gZY1+Fya'
+    'xXDBW1oj64Nr7p8PnrbJh3ZmIuVIexRzauK/3zf6Pwy156F4Oipf6g0/XIhDl1DHdjriU5egh6+PwD58ZYRMMspKO48lKVmFHcn1'
+    'JKnegVqPkh25SPKKDvjvF52E1JOWeokdtZCmCqz5SJmRJ215VvOPpK/ItxCcpRqyDnL58i/leuPnIQhUUwF8/McJao//KEGh+irg'
+    '4z9C4KgN7fUHyTYCYHf65EitKILEb7yRXaaWlEE3oP1bUaLWtHEh980B9MALYPsycNSiHKIH2OcNMrWpDG1AG4yobxagh3Rhm92Z'
+    'bRjAAq/gtev4WAxxndVDM6I4dv44vs3pgxGgkw3i5AFeTUHXPEAnGkUrADyfgg4A4OkUEAAASSYSVQCeJBsvEAAXwShIBWA5IvIg'
+    'AF4uE6EDsLSTBhiAIPYlrAQQxXJZSgDzNpSBALJULkULIEplQ7UA5mwoQAEEofMMNQDPGIje3v9pdvzj9D4v1pB0fzpuftT/ESz8'
+    'fuNM0gVBgDcBgMC3BOoAeL58XB0Ay+cF6gB89QQFDqCwBUKVADKbG6sE8GUVD3AAA1tCqBIAsYWitQAS17leLQDHlRGqBVC4Pidr'
+    'AWSurHQtgI7ra6YWgJc421b7IqMvp94RECAyOeJqAIPE6bwmgP1WAAQIQCdASwDnIq4NAO8H4D0xfCzkAQE85y2VGgCdxE0/TYAs'
+    'cVdUE6BI3DbWBHASDzY0AZIRCIY0Adhyo5UABpFHY4oAXuTGtCJAFrlzrwhQRN6NKQIkkVcDegBW5umnHoCXeTyvBxBkni7pATj2'
+    'a9PKAN/wvhD8jS0WTzDNAkzyXoArMzEP8CabkeAMhxYA3rkBstTN3Y/5K2dKt78ZbOi+cGnuoWBBLPvQdelA8noT3oOYbOjJkevH'
+    '/fp4MF26TGIvOG4bLl9+cnoxtq+aaf0x936AIveKaWkVswJcJAtSPRQAguBLvqVoiBVA8i3lFhvaC9DJ1oS5jdIAychOwVUYoBMv'
+    'yzPJArx6VH98Cj5HSYBXb+pZ4olREOB1nSSGz4LbJAawpj4MR47uPsoArKnswZPnvb1G2AOwrlQY06n34z5xA6yss8VXX+j2uN4/'
+    'pmkcmQDWFqlCr/CEX2MLv8oZfJ05/Ep/+LUW4atd4tcbxa/4il9zF7/qMXzdafzK3/i11/Gr3+P3H8DvAIHfgwO/Cwp+Hxr8TkAG'
+    'vheTwe+Ghd+PDL8jnIHvyWfwuyIa+L6UBr8zqIHvzSppR0rdcQ1+f2ID3yGaHaGr0+0du0v67x0Ju0/9L0sKR7xzDMnUV8r7GGJu'
+    'YfR/52GrLfnQzuj/BhnBr/PR1gdnGlUq2T971Tj4XJJpXsmV3Pk+DvbnlFg7xN53uTiAoZ86dUpbPwBjISdxzqGdhQAAAABJRU5E'
+    'rkJggg=='
+)
+T_ICON_OUT_PNG = (
+    'iVBORw0KGgoAAAANSUhEUgAAAMAAAADACAMAAABlApw1AAAATlBMVEVHcEzIOC7IOC7IOC7IOC7IOC7IOC7IOC7IOC7IOC7IOC7I'
+    'OC7IOC7IOC7////Zcmv//f3xy8jSWlLlnZj66+rcfXbrtbH12tjPTkXhk40pb230AAAADXRSTlMAvWkmNu4WTgmNoNPZCr8a0AAA'
+    'BExJREFUeNrtnQmOpDAMRQkkcQLlLrr2uf9FR7NppBZUUWA7+S3+CfKIg53FdtPs2rVr17dTip7a3LshBGYOYXB9bsnHBDD0jvLA'
+    '8xoyddViRMqBlyhkitV9eZ/5PWVfz0wkcrxGjhLw6Cth6DJvVe7KDZ8OLKEDlbGdluXUJujh2yOID98YgVhHRmvBB9ZS8AYBQ8+a'
+    '6iOo9RjZUXSsLxeBP7/qJKSerdRr/FE7tlQHaz5aZpTZWlnU/B3by8kthBi4hEKEXL7yS9lzOXnw8UsQlB3/doLS499KUH782wg6'
+    'rkHr/0WR69Baf5BCJQBhpU92XIscSPwmG9kR1yQC/QGt/xUlrk1vLuS+OoAeeAG8vwwi16iI6AHWeQPiOkXQBvSGEfXVAvQwe4BN'
+    'e4NQMUAAXsFL1/G2GOI8qatlRLHt/nH8mNKnIECrG8TpA7yagrZ6gFY1ijYAeD4FLQDA0ylgAADW9AEmAE98wQEC4KC4kTcBmN/g'
+    'ZxCArHcSYQMw9yclGABS2wkbATi1sywjgGkbIiAA0jpLsQJwWqehVgBTNuShALzSfYYZQBYMRB/H/5oGuB+nJRqSrj+OO36s1Uny'
+    'kI7AAEhuCZQByHLncWUAgpwXKAPw1RN0cACdWCBUCIDE3FghgC+reIADGMQOhAoBsFgoWgogSd3rlQKIUrF0KQAvtZ0sBUBSp9Kl'
+    'AFqp3UwpgKxxt222I+Mvt94OEMAJOeJiAIPG7bwlQPhWAAwIwDtATQD7Ii4NAO8H4D0xfCyUAQGy5CuVEgCtxks/SwDSeCtqCeA1'
+    'XhtbAkSNhA1LgNQoBEOWAGJno4UABpWkMUOArPJi2hCAVNLGDAE6lbwxQ4CkkjVgBxB0Uj/tALJO3oMdAOmkLtkBRPFn08YA3/C9'
+    'kOKLrbtyLC3oCS6TABd9LyB1MjEN8KF7IiH5I71PAxzVf6JSNvQ5Of7R6PW3gA3dpmdgvBpYkIgNnWfuI8fzQ92CRGzoyZXr/fbj'
+    'ehV6dJnUMjge8wDjKHZLnBWLYVwsrrk7vSymuVUsCnDQzCW+GgCQYibfXDQkCqCZS/mODa0FaHVrwjxGbYDU6E7BWRmgVS/Lc9EF'
+    'eJVUv30KTqMmwKucepF4YlQEeF0nSSCkO13UAJbUh5E4ozuPOgBLKnvI7O4ft1EDYFndRaFb7+vtIg2wsM6WXH2h0/V8+7xfxlEI'
+    'YGmRKvQKT/g1tvCrnMHXmcOv9IdfaxG+2iV+vVH8iq/4NXfxqx7D153Gr/yNX3sdv/o9fv8B/A4Q+D048Lug4Pehwe8E1MD3Ymrw'
+    'u2Hh9yPD7wjXwPfka/C7IjbwfSkb/M6gDXxvVk07susUjd6fuIHvEC2O0Jbp9o7dJf1PgITdp/63JdEW7+woNeW1lqGO0f9l8O/a'
+    'Uvb1jP5fkEF5mY8OmWJTqVJH+VlW45CpS031StFTm3s3hF9TEsLg+tySjwBD37Vrl7V+As8VJ7bSs16TAAAAAElFTkSuQmCC'
+)
+
+
 # ── init ──────────────────────────────────────────────────────────────────────
 
 class Init:
@@ -1633,11 +1793,45 @@ class Init:
                      lambda: (icon.parent.mkdir(parents=True, exist_ok=True), icon.write_bytes(hledger_icon())))
         return True
 
+    def step_t_quick(self):
+        """t-quick: clock in/out of t's timelog through Android popups, once t is in ~/.task/scripts."""
+        if not is_termux():
+            self.note(SKIP, 't-quick', 'Termux only')
+            return True
+        if not (Path.home() / '.task' / 'scripts' / 't').exists():
+            self.note(SKIP, 't-quick', 'no ~/.task/scripts/t')
+            return True
+        path = Path.home() / '.shortcuts' / 'tasks' / 't-quick'
+        if path.exists():
+            if path.read_text(errors='replace') == T_QUICK_TEXT:
+                self.note(OK, 't-quick', f'{path}')
+            else:
+                self.note(WARN, 't-quick', f'{path} (not the one mobilize writes: left as it is)')
+        else:
+            def write():
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(T_QUICK_TEXT)
+                path.chmod(0o755)
+            self.act('t-quick', f'{path}', write)
+        icons = Path.home() / '.shortcuts' / 'icons'
+        for name, data in (('.t-quick-in.png', T_ICON_IN_PNG), ('.t-quick-out.png', T_ICON_OUT_PNG),
+                           ('t-quick.png', T_ICON_OUT_PNG)):
+            icon = icons / name
+            if icon.exists():
+                self.note(OK, 't-quick', f'{icon}')
+                continue
+            self.act('t-quick', f'{icon}' + (" (re-add the widget to see it)" if name == 't-quick.png' else ''),
+                     lambda icon=icon, data=data: (icon.parent.mkdir(parents=True, exist_ok=True),
+                                                   icon.write_bytes(base64.b64decode(data))))
+        if not shutil.which('termux-dialog'):
+            self.note(YOU, 't-quick', "its popups need Termux:API: pkg install termux-api")
+        return True
+
     def run(self):
         steps = [self.step_identity, self.step_packages, self.step_task, self.step_key, self.step_clone,
                  self.step_push, self.step_git_identity, self.step_merge_driver, self.step_taskrc, self.step_local_rc, self.step_state_files, self.step_hooks, self.step_path,
                  self.step_mobilize_rc, self.step_commit, self.step_web, self.step_launcher,
-                 self.step_icon, self.step_autostart, self.step_nb, self.step_hledger_web]
+                 self.step_icon, self.step_autostart, self.step_nb, self.step_hledger_web, self.step_t_quick]
         self.out(f'mobilize init{" (dry run: nothing changes)" if self.dry else ""}')
         for step in steps:
             try:
