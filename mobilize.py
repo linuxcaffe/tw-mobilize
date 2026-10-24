@@ -47,6 +47,7 @@ station's in local.rc (untracked). All under the task dir: $TW_TASK_DIR, else ~/
 Exit 0 ok, 1 warnings, 2 failures. Standard library only.
 """
 import argparse
+import base64
 import datetime as dt
 import hashlib
 import json
@@ -63,7 +64,7 @@ import sys
 import urllib.request
 from pathlib import Path
 
-__version__ = '0.7.0'
+__version__ = '0.7.1'
 
 OK, DONE, WOULD, SKIP, WARN, FAIL, YOU = 'ok', 'done', 'would', 'skip', 'warn', 'fail', 'you'
 
@@ -758,6 +759,61 @@ def nb_scripts():
             home / 'bin' / 'termux-url-opener': URL_OPENER_TEXT}
 
 
+# nb's logo (github.com/xwmx/nb, docs/images/nb.png), squared and shrunk to 192px: the widget icon
+# for nb-note and nb-quick. The npm package ships no image to copy, as tw-web's logo is copied.
+NB_ICON_PNG = (
+    'iVBORw0KGgoAAAANSUhEUgAAAMAAAADACAMAAABlApw1AAAAwFBMVEX////+///9///8//7+/v79/v78/v78/v38/f30+/rd'
+    '8vDF5uWl4tah2tWWz9Bx1r1uwL4vzZ8vwaAkzZoky5oczZckyZoeyZgjxpojwZocwpcjvZojvJoju5ojuZojt5sht5oXuZZB'
+    'rqoiqJwhtJohspohqpsgr5ogqJsWspUWqZYfopoYo5cen5oenpoenZsUnpYjlZ0em5selJsdlZsRl5UXkJgcjZsTjZceiZwc'
+    'ipsbh5sRiZcbhJsRg5YTfphzFOhAAAALm0lEQVR42u2cCXfavBKG5RUvYBuyEFzKYkgTh5KwJqQk7f//V3e02TKbZe6X28t3'
+    '9J7T0zY4MI9HI41GYxBSUlJSUlJSUlJSUlJSUlJSUlJSUlJSUlJSUlJSUlJSUlL6h6Xp9o507ZLst6R/+H96/xHy/B155MeX'
+    'IR15yWCYpulQUCf0LsUHmuYkaa/X+47V7X4DdUDDpqGZFwFQQ37aHwx6jKHLGYY+vHQZAHUCMMgIGED9QgB0FGKAwWBnGA1D'
+    'ZFyIBxoEoId9cJkAPvPAhQJYyG0N+yA2ghjB5QBAEPj9lGt4gQDYB/VGSJUM+Ex6QQDikltPu8wFlwSA9FqN5KCOUU/5YnZR'
+    'AOKixsNYAfxNAEygAP4qwPdLBuj9KwC+XzIAdYEC+FsAvX8BQE8B/PcyTcuydMsyzwLABIcANFM3QJb5tQUX07H1/DNt2/xH'
+    'AExdeFdcTbXOoLCc3SKso+1ZT7J716Ny8H/ETy4vsTCCIoBO/83e1iVviwyjYvnxYK2v8B6ajT/FD6Jk8ryYPT9Pkij0Xfh8'
+    'Sx6AlYhEABs+xPEaYbPZiUF3zWYY1snNsau4wUReEBUV+AUCbL4fjdbr9eLlZUo0W8+SyKMvSQMMCgAWrv4GzXgIphPdttvt'
+    'OG43Q5/Byd7/xm+uj0yRnpUwTRgpfkKMJ3p+nk4noOlsBAgylc68SjfIALBT/bAzjO86nc4d1+3t9W37pt2sG9KFeB2579t3'
+    '0BvTEmv+0UBONsDA/NcFEQeYUobZqC7vAVohYgBwU7xwOOxQCQCg6+ubm2bdQXKnIQ444P0X0Vuu5SZid8BGTgR3f5EDMAIM'
+    'MJrMInSOB2oINTrc/D2C2+srQPAIpgRAwAF+iQAJH/5eslksViKB4ILJaBaV18sZQB4DNnJDwfx9gGuM0EAydWACsN0DeE0c'
+    'iG4YqI3V63y1WnGEHRcQgtI5IwcY9DBADXmtYYceGOwQ3HKCq6urm9CVmCREAIHgdQ4AYH+wWS1XGOCYC4AgKLtRGQC4AAAc'
+    '5H+L+YnHcRcAAQwjoxzAPwiAPQBwmyWxn3uAmF8EmDz+9EtmjByAeAD53W+k0vtt3/6CCwhB2WRkmm7yG89ChSAmHgD7P5j9'
+    '3AVrrNlsOhEAJj8TpGmlAOMMwB90u/mhEygm52ewBIDlBRcAgVtKYEGYbvkasBUATNTI7V9h41dJQta55Hn9PMkJRrPG6bEq'
+    'AqSB2+oKp2bxsNOCBTgM4E/zDta0ggsgDsonU1M4Dg0+siHkIv91xQEWq80qaXhsaYAFNFlPRBfgiJcDGLRaeakaZtKo7rn8'
+    'Otfzw2ZcAACC8kVZ8JH/O/eAO39dUoDlYjMPPLJ+apBN4/dzo9lEcMHpkzsKMGZRPOAlos6wFXp0NbXtmk3tdOsMISOol6/J'
+    'GktHHTsHSFD0QRZlsP/1Fac9msMzXc2CEROAD3gYw1SqyQGQMydaYIm7xHzbygaJqddg6XKDu7YAcNV0NdmjZUf0QLRZUs03'
+    'c38vd9Z1FOUEk9HJWGMAnGBA6ysteFdjb601cY7UbF8XBtEZAG9vmyVLizYQDvupv67pySyzf1bnqZMEAM6qYWvp4LtwKDuD'
+    'dRoTZC648eWS3h2AJc3r5pAVHTQOLp5NxOX4JMDTDgBeDo6GjUEIrgUXaGcA0MR0/hEdSfpNDeUugKXgxIdwAD4RUftPZGqY'
+    '4KrgAuMsACDASZ11zKw8jk9PpBnAmOcTia6fzDQN5MdXYhTo8gCFrBpnFPrRD/GyMTQZnVrzdwEGXa/MohoKb7IxdHUl2eNC'
+    'AcSkdOkdD04TOcmUEeB8yJAGSOulQ8Kig4iPoUDOBbsAy4/g1OSCcBBMJaahHAAT9IcJ2Q+XuaAR52HclGuU2gXYJMapKo2G'
+    'orMAUpmOG0sDF+RhLDeGGMCvbFt2egKma9lUDuB+zAjAAY4pcTt1MQpu5Jp0dgA+ktPYNpmGpnxXY58GuOcAEAEy61JN89tZ'
+    'FEguBWRzk21slh/+6QhwUGPNsmp5gPGg5UoNB5gjmu1sJm2ezncPAkAEnN6nCACTdTkAJeinkeS6WhhDchNpBkAIfpdMQecC'
+    'NCQzG/gtYR6SWoyLAG9lqw0HmFYDkM0LdOTlKd2NFHYBYJOUzb1VAe5pEMt3jrrNHCCs5gEg+B2VMWcA0woA4wQhudIz3D2I'
+    'Yl6fOAOgXhICBGD6XAHgvkoMY4IwG0Ny86gA8Ks8BASAaSUAXR7g5jqrcckkE0KR6+3X3C1zNQV4rgBwDwChNACZR3mZsSrA'
+    '+0dpDFcEeMgAZE8pDRTG13x733SlAbYZAJIAoHXGrweQWslEgN9R6S9UBCAEVQGyYjvkElpVAFsC4KUiwH2FINYZwC0BkI8B'
+    'QiAPQM/MvgIAT6O80vu1AM9yAA8MQP4UmAHgUzP5dWBLCCoAvFQCeGgZ1VZidmYmvxJ/IQAmGN/L5kImLm/xYntFgG1FgOcK'
+    'AFWy0Tg774BsVA7gDwXYVgF4kQF4eGAETw3JZ1DwfoADXLX9rwR4qQKQJvI7MgBgZ9+3sjuyygCLqgD3fVe2UNhs81O/dtOV'
+    '3BOfCTCVBCAuaMhWJWJ+bHndlq5KnAfwIg3wQMeQXF0o5gev17F0XejP+2dFgEVVgPtU5sDC0txWfnJ850n2Tfh/tpUBFpUA'
+    'qAvK+8pqKIizs+92U/qAAwA+vxoAR4FROoC4AzBAHMitHWcA8P6DSgB4IjJKzwdiof3AqwTwWRFgUQmArgWupp+23x/e8Q6K'
+    '27jCCc3/BgDnpKfuqYG81l0nB5B9AhYDfH4RwI8fhTEEG7PjVRvcTxRnPSw4hDWtEsBnRYBFJQBGELlHGk91g9nPCLADDFQN'
+    '4FMWYMPboCQACi4AAnxSv39WibsYfGY/BYhlTupNh0oEYD9yrKNXO4EAoJOfGMWrTQs3RTuGAMD2luP+OA1xn4qtZy3TpmWT'
+    'Xom40Ah1WxLwBJv/gwN8Yg/ki+KRq7MhBACNbARoB66szzIAVmCBnU0/7bNuFU03bIMOE6/RKnQz3sZ1mTzUZf1CUQ6Q8B4i'
+    '9+jVfpQDRAevdlknUoQ9gAmekoCXiMbj/iAdJ4HYL1QPW4Vuxo7MANJMFLz/YWL2Qxh/8m7eeYDEvni4ev66oXrNewFnpBdt'
+    'NptEDrsav+/o8Sfo6YnYTwEQI6CnBfiLG1ot2rEVtbrD4bdCNyO2XysP3UZmd64taeclHb2Foxq4+mNF+4gWQj8pbqp+mRTO'
+    'aiB014+Pj6Mfox9cGMDBBFmxfdzvEwjy9RO0D03sBYybEpsHDSUHAejuHvb3G6GkDxNywhu5Cu2AvKF0MmVXw41Lfo4emXIA'
+    'eKFAgE+Os8e+u8VuRmx/6QwKm//3owC00isUqrFZBwHyhtIRvRredzR5LAL8IAA6IxiPxQaQ3a/QkLUfdy1+HgD4LAJYGYBD'
+    'AJZHAHCVjm5fdeRl9z93wVNCXqrfp33BBbtfHUAJhjDNSqQQ1mEPCC7YFjywB7DblMw8YBU8wF3whCuLGv7elafxaYC400CS'
+    'B8oHY0Ag2M6dvSF01AXTKWsdMpGR/HzcHURPtEBVQ26YghMyAvp0RD6G4mHiyR6m2SjaA3gXVcgqbBR8zJe8H3C+KDbm4zJv'
+    '3rgfrEdcbCp6eGJ5DXmoIk3HeSfaIP8SFjC/6cs/xGGZbvLnkPhzHZC857cCtyqTJt9NrrWoLNXXNDeZCXrCy0HAp3XyXEh0'
+    'n+J5tN/PxhB+5nsYt+qoylcpmfitjqv4PE3J1eLTN/C3H4SiAk94K2ygFyZ4CQAn9HvfewPSQ52QHlu7ypNMZqXX5a82D5ac'
+    'xSyVJD9R0ur307TXa7WSsE6yI7vig1hZenlQu3Zozt5zZ7lq4tVabedV60DyjJMgnDN5nkvHnm1d0leJmUbhbuu1y/oiNJ6f'
+    '6Lpt67p5gbYrKSkpKSkpKSkpKSkpKSkpKSkpKSkpKSkpKSkpKSkpKX29/gPPSTanzaYIjgAAAABJRU5ErkJggg=='
+)
+
+
+def nb_icon():
+    return base64.b64decode(NB_ICON_PNG)
+
+
 # ── init ──────────────────────────────────────────────────────────────────────
 
 class Init:
@@ -1248,6 +1304,13 @@ class Init:
                 path.write_text(text)
                 path.chmod(0o755)
             self.act('nb', f'{path}', write)
+        for name in ('nb-note', 'nb-quick'):
+            icon = Path.home() / '.shortcuts' / 'icons' / f'{name}.png'
+            if icon.exists():
+                self.note(OK, 'nb', f'{icon}')
+                continue
+            self.act('nb', f"{icon} (nb's logo; re-add the widget to see it)",
+                     lambda icon=icon: (icon.parent.mkdir(parents=True, exist_ok=True), icon.write_bytes(nb_icon())))
         if not shutil.which('termux-dialog'):
             self.note(YOU, 'nb', "nb-quick's popups need Termux:API: pkg install termux-api")
         return True

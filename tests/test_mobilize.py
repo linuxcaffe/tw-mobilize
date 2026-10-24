@@ -504,7 +504,11 @@ def test_init_on_termux_gives_nb_its_quick_note_buttons_once_nb_is_installed(hom
     assert init.step_nb()
     for path, text in scripts.items():
         assert path.read_text() == text and os.access(path, os.X_OK)
+    icons = [home / '.shortcuts' / 'icons' / f'{name}.png' for name in ('nb-note', 'nb-quick')]
+    for icon in icons:
+        assert icon.read_bytes().startswith(b'\x89PNG\r\n\x1a\n'), "nb's logo, where Termux:Widget looks"
     assert not any(s == mobilize.YOU for s, _ in notes), 'termux-dialog is there'
+    icons[0].write_bytes(b'mine')
 
     mine = home / 'bin' / 'termux-url-opener'
     mine.write_text('#!/bin/sh\necho my own opener\n')
@@ -512,7 +516,8 @@ def test_init_on_termux_gives_nb_its_quick_note_buttons_once_nb_is_installed(hom
     notes.clear()
     assert init.step_nb()
     assert mine.read_text() == '#!/bin/sh\necho my own opener\n', 'one edited by hand is left alone'
-    assert [s for s, _ in notes] == [mobilize.OK, mobilize.OK, mobilize.WARN, mobilize.YOU]
+    assert icons[0].read_bytes() == b'mine', 'an icon already there is kept'
+    assert [s for s, _ in notes] == [mobilize.OK, mobilize.OK, mobilize.WARN, mobilize.OK, mobilize.OK, mobilize.YOU]
     assert 'termux-api' in notes[-1][1]
 
 
