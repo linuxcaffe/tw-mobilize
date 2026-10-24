@@ -33,11 +33,11 @@ that's Termux, not mobilize. Run `termux-change-repo` (pick a mirror group near 
 `pkg upgrade`, then the three lines again. Termux is a rolling release: a long-unused install needs
 upgrading before it installs anything.
 
-**Status: 0.7.1, in daily use on one phone** (`s5`, since 2026-10-22). Commands: `init`, `check`
+**Status: 0.7.2, in daily use on one phone** (`s5`, since 2026-10-22). Commands: `init`, `check`
 (`--hooks`: the hook pre-test), `hooks` (each station's chosen hooks), `android` (the phone's own
 settings, step by step), `stations`, `-e`; tested with pytest in a fake home folder. The Termux launcher
 restarts tw-web when it dies, and opening Termux starts it. With nb installed, `init` also adds
-home-screen buttons for quick nb notes (0.7.0). This README also keeps what was learned
+home-screen buttons for quick nb notes (0.7.0), and with hledger-web installed, a button for it (0.7.2). This README also keeps what was learned
 setting up the first phone (2026-10-21/22): "Problems found" is the record.
 
 ## TL;DR
@@ -75,6 +75,7 @@ setting up the first phone (2026-10-21/22): "Problems found" is the record.
 | Launcher | `~/.shortcuts/tw-web` (Termux) | starts tw-web in a restart loop, then opens the browser; `--start` only starts it |
 | Autostart | a marked block in `~/.bashrc` (Termux) | opening Termux starts tw-web if it isn't running |
 | nb quick notes | `~/.shortcuts/nb-note`, `~/.shortcuts/tasks/nb-quick`, `~/bin/termux-url-opener` (Termux, once `nb` is installed) | home-screen buttons for [nb](https://github.com/xwmx/nb) (`npm install -g nb.sh`): `nb-note` asks in a terminal, `nb-quick` in Android popups (`pkg install termux-api`), and Share → Termux saves what was shared. The title becomes the filename, so a file browser shows real names. nb's logo is their widget icon (`~/.shortcuts/icons/`) |
+| hledger-web button | `~/.shortcuts/hledger-web` (Termux, once hledger-web is installed) | mobilize doesn't install hledger-web: Termux's `hledger` is CLI only, and Debian trixie dropped hledger-web, so today it comes from a proot-distro Debian switched to sid (`apt install hledger-web`); a native one on Termux's PATH is used first. Serves `localhost:5050` (tw-web has 5000) on `$LEDGER_FILE` or `~/.hledger.journal`, with Termux's home bound into Debian at the same path; `--start`, `--stop`. hledger's logo is its widget icon |
 
 ## Keeping tw-web running on Android
 
@@ -357,6 +358,7 @@ remote is an argument, so the repo can be public.
 | Launcher | yes: a Termux:Widget shortcut in `~/.shortcuts/` that restarts tw-web when it dies (the widget app itself is **you**, from F-Droid); an unedited older launcher is replaced |
 | Autostart | yes: a marked block in `~/.bashrc`, so opening Termux starts tw-web (`mobilize.web.autostart = no` leaves it out) |
 | nb quick notes | yes, once `nb` is installed: three scripts and nb's logo as their icons (see "The pieces"); a script that's there and different, say your own `termux-url-opener`, is left as it is. `termux-api` for the popups is **you** |
+| hledger-web button | yes, once hledger-web is installed: the launcher and hledger's logo as its icon; one that's there and different is left as it is. Installing hledger-web is **you** |
 | Install tw-web as a browser app | **you**: it opens `http://localhost:5000` with `termux-open-url` |
 | Commit the shared files it changed (`mobilize.rc`, its include), together; never push | yes |
 | Final `check` | yes |

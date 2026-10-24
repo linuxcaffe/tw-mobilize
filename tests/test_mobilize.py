@@ -528,6 +528,45 @@ def test_nb_scripts_are_valid_shell():
         assert r.returncode == 0, f'{path.name}: {r.stderr}'
 
 
+def test_init_on_termux_gives_hledger_web_a_button_once_it_is_installed(home, tmp_path, monkeypatch):
+    monkeypatch.setenv('TERMUX_VERSION', '0.118')
+    prefix = tmp_path / 'usr'
+    monkeypatch.setenv('PREFIX', str(prefix))
+    notes = []
+    init = _termux_init(notes)
+    launcher = home / '.shortcuts' / 'hledger-web'
+    icon = home / '.shortcuts' / 'icons' / 'hledger-web.png'
+    assert init.step_hledger_web() and not launcher.exists(), 'no hledger-web: nothing written'
+    assert notes[-1][0] == mobilize.SKIP
+
+    debian = prefix / 'var' / 'lib' / 'proot-distro' / 'containers' / 'debian' / 'rootfs' / 'usr' / 'bin'
+    debian.mkdir(parents=True)
+    (debian / 'hledger-web').write_text('')
+    notes.clear()
+    assert init.step_hledger_web()
+    assert launcher.read_text() == mobilize.HLEDGER_WEB_TEXT and os.access(launcher, os.X_OK)
+    assert icon.read_bytes().startswith(b'\x89PNG\r\n\x1a\n'), "hledger's logo, where Termux:Widget looks"
+    assert mobilize.hledger_web_where() == 'debian'
+
+    launcher.write_text('#!/bin/sh\necho mine\n')
+    icon.write_bytes(b'mine')
+    notes.clear()
+    assert init.step_hledger_web()
+    assert launcher.read_text() == '#!/bin/sh\necho mine\n', 'one edited by hand is left alone'
+    assert icon.read_bytes() == b'mine', 'an icon already there is kept'
+    assert [s for s, _ in notes] == [mobilize.WARN, mobilize.OK]
+
+    (prefix / 'bin').mkdir()
+    (prefix / 'bin' / 'hledger-web').write_text('')
+    assert mobilize.hledger_web_where() == 'termux', 'a native one (a future Termux package) comes first'
+
+
+def test_hledger_web_launcher_is_valid_shell():
+    r = subprocess.run(['sh', '-n'], input=mobilize.HLEDGER_WEB_TEXT, capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    assert f'port={mobilize.HLEDGER_WEB_PORT}' in mobilize.HLEDGER_WEB_TEXT
+
+
 def test_ssh_urls():
     assert mobilize.is_ssh_url('git@codeberg.org:me/data.git')
     assert mobilize.is_ssh_url('ssh://git@host:22/x.git')
