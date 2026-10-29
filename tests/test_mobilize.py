@@ -2,6 +2,7 @@
 on disk), so nothing touches ~/.task, ~/.ssh, ~/.bashrc or the network. The data URL is a
 plain path, so the SSH key and access steps are skipped; Termux is never detected."""
 import importlib.util
+import io
 import json
 import os
 import socket
@@ -167,14 +168,59 @@ def test_no_data_url_and_no_clone_says_what_to_give(home, capsys):
     assert '--data' in capsys.readouterr().out
 
 
+class _Download(io.BytesIO):
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+
+def fake_installer(monkeypatch, body):
+    """taskwarrior-2.6's install.sh, as downloaded: a script with this body; returns the URLs asked for."""
+    asked = []
+    def urlopen(url, timeout=None):
+        asked.append(url)
+        return _Download(body.encode())
+    monkeypatch.setattr(mobilize.urllib.request, 'urlopen', urlopen)
+    return asked
+
+
 def test_taskwarrior_3_gets_a_loud_warning_but_init_carries_on(home, remote, monkeypatch, capsys):
     monkeypatch.setattr(mobilize, 'task_version', lambda: '3.1.0')
+    asked = fake_installer(monkeypatch, 'echo "Replace Taskwarrior 3.1.0? (no)"; exit 1\n')   # the owner said no
     code = init('--data', remote())
     out = capsys.readouterr().out
     assert '!!! WARNING: Taskwarrior 3.1.0 is installed' in out
     assert (home / '.task' / '.git').exists(), 'not blocked'
     assert 'NOT 2.6.x' in out, 'check says so too'
     assert code == 1
+    assert asked == [mobilize.TASK_INSTALLER]
+
+
+def _task_init(notes):
+    init = mobilize.Init.__new__(mobilize.Init)
+    init.dry, init.out = False, lambda *a: None
+    init.note = lambda status, step, detail: notes.append((status, detail))
+    init.act = lambda step, detail, fn: (fn(), True)[1]
+    return init
+
+
+def test_step_task_runs_the_synced_installer_before_downloading(home, monkeypatch):
+    script = home / '.task' / 'scripts' / 'taskwarrior-2.6'
+    script.parent.mkdir(parents=True)
+    flag = home / 'installed'
+    script.write_text(f'touch {flag}\n')
+    monkeypatch.setattr(mobilize, 'task_version', lambda: '2.6.2' if flag.exists() else None)
+    assert _task_init([]).step_task()               # the home fixture fails any download
+    assert flag.exists()
+
+
+def test_step_task_stops_init_when_nothing_got_installed(home, monkeypatch):
+    monkeypatch.setattr(mobilize, 'task_version', lambda: None)
+    fake_installer(monkeypatch, 'echo "building 2.6.2 needs: cmake"; exit 1\n')
+    with pytest.raises(SystemExit, match='Taskwarrior 2.6.2 is not installed'):
+        _task_init([]).step_task()
 
 
 def test_edit_opens_the_shared_or_the_local_rc(home, remote, monkeypatch, capsys):

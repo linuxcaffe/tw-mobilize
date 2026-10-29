@@ -33,11 +33,11 @@ that's Termux, not mobilize. Run `termux-change-repo` (pick a mirror group near 
 `pkg upgrade`, then the three lines again. Termux is a rolling release: a long-unused install needs
 upgrading before it installs anything.
 
-**Status: 0.8.2, in daily use on one phone** (`s5`, since 2026-10-22). Commands: `init`, `check`
+**Status: 0.8.3, in daily use on one phone** (`s5`, since 2026-10-22). Commands: `init`, `check`
 (`--hooks`: the hook pre-test), `hooks` (each station's chosen hooks), `android` (the phone's own
 settings, step by step), `stations`, `-e`; tested with pytest in a fake home folder. The Termux launcher
 restarts tw-web when it dies, and opening Termux starts it. With nb installed, `init` also adds
-home-screen buttons for quick nb notes (0.7.0), and with hledger-web installed, a button for it (0.7.2); and t-quick clocks in and out of the timelog (0.8.0). The task2 deb comes from [taskwarrior-2.6](https://github.com/linuxcaffe/taskwarrior-2.6) (0.8.1), tw-web from `tw -I tw-web` (0.8.2; `mobilize.web.repo` is no longer read). This README also keeps what was learned
+home-screen buttons for quick nb notes (0.7.0), and with hledger-web installed, a button for it (0.7.2); and t-quick clocks in and out of the timelog (0.8.0). The task2 deb comes from [taskwarrior-2.6](https://github.com/linuxcaffe/taskwarrior-2.6) (0.8.1), tw-web from `tw -I tw-web` (0.8.2; `mobilize.web.repo` is no longer read), and Taskwarrior from taskwarrior-2.6's installer, which also builds it on Linux (0.8.3; `mobilize.task.deb` and `.sha256` are no longer read). This README also keeps what was learned
 setting up the first phone (2026-10-21/22): "Problems found" is the record.
 
 ## TL;DR
@@ -66,7 +66,7 @@ setting up the first phone (2026-10-21/22): "Problems found" is the record.
 
 | Piece | Where it comes from | Notes |
 |---|---|---|
-| `task` 2.6.2 | Linux: the distro. Termux: `task2_2.6.2-3_aarch64.deb` from gittw | Termux's own `taskwarrior` package is 3.x: never install it. The deb is repackaged as `task2`, conflicting with it |
+| `task` 2.6.2 | [taskwarrior-2.6](https://github.com/linuxcaffe/taskwarrior-2.6)'s `install.sh` (0.8.3): Termux, the `task2` deb; Linux, a build into `~/.local` | Termux's own `taskwarrior` package is 3.x: never install it. The deb is repackaged as `task2`, conflicting with it. The same script is `~/.task/scripts/taskwarrior-2.6` once `tw -I taskwarrior` ran on any station |
 | `~/.task` | `git clone` of your gittw remote | data, config, `hooks/`, `scripts/` (with exec bits), themes |
 | `~/.taskrc` | symlink to `.task/.taskrc` | the shared config |
 | `~/.task/local.rc` | written per station, untracked | `gittw.device`, `tw.platforms`, `hooks=off` until hooks are tested, then `mobilize.hooks` and `hooks.location` (`mobilize hooks --set`) |
@@ -189,9 +189,8 @@ Termux from F-Droid. Each step was done once on `s5`; the problems found are in 
 ```bash
 # 1. Taskwarrior 2.6.2 (once)
 pkg install python git openssh
-curl -fLO https://raw.githubusercontent.com/linuxcaffe/taskwarrior-2.6/main/termux/task2_2.6.2-3_aarch64.deb
-sha256sum task2_2.6.2-3_aarch64.deb   # bd80e37006fc59a4faaba4a74d99883bc1e4141c711c5fc4775625f667b594a8
-dpkg -i task2_2.6.2-3_aarch64.deb && task --version
+curl -fsSL https://raw.githubusercontent.com/linuxcaffe/taskwarrior-2.6/main/install.sh | bash   # 2026-10-21: the deb, by hand
+task --version
 
 # 2. An SSH key, added to every host your gittw remote pushes to
 ssh-keygen -t ed25519 -C "<station>"
@@ -290,7 +289,7 @@ The bootstrap runs before anything exists, so settings come from four places:
 | **Command-line options** | `--data <fetch URL>`, `--station s5`, `--platform mobile` | needed before the clone exists |
 | **`mobilize.rc`** (tracked, travels with the clone) | the recipe shared by every station: push URLs, the list of stations | written once; each new station reads it |
 | **`local.rc`** (untracked) | this station: `gittw.device`, `tw.platforms`, `hooks.location`, and overrides such as `mobilize.web.dir` | the only part that differs per device |
-| **Built into the tool** | the task2 deb's URL and sha256, Termux package names, tw-web's default folder (its repo is `tw -I tw-web`'s) | facts about the tool, not about you; `mobilize.rc` or `local.rc` can override them |
+| **Built into the tool** | where taskwarrior-2.6's installer is, Termux package names, tw-web's default folder (the deb and tw-web's repo are their installers') | facts about the tool, not about you; `mobilize.rc` or `local.rc` can override them |
 
 A sketch of `mobilize.rc` (yours lives in your private gittw repo; nothing private is in the tool):
 
@@ -314,16 +313,17 @@ everyone's path.
 - **tw-web:** public, cloned over **https**, so running it needs no key (switch the remote to SSH to push
   from that station).
 - **tw-mobilize:** public, fetched once by `curl`; afterwards it comes with the clone.
-- **gittw:** hosts the task2 deb. `gittw`, `tw` and the other fleet scripts are already in
-  `~/.task/scripts/`, so no awesome-taskwarrior checkout is needed on a station.
+- **taskwarrior-2.6:** hosts the task2 deb and `install.sh`, which installs it.
+- `gittw`, `tw` and the other fleet scripts are already in `~/.task/scripts/`, so no awesome-taskwarrior
+  checkout is needed on a station.
 
 **Packages:**
 
 | Kind | Termux | Linux station |
 |---|---|---|
 | Bootstrap | `python git openssh` (one `pkg install` line) | `git`, `python3`: checked, not installed (that needs sudo) |
-| Taskwarrior 2.6.2 | the task2 deb, sha256 checked; 3.x installed: loud warning | the distro's; 3.x: loud warning |
-| tw-web's Python packages | `pip install -r requirements.txt` (no compiler needed on `s5`; `clang` only if a build fails) | in a venv: newer Debian/Ubuntu refuse a system-wide `pip install` |
+| Taskwarrior 2.6.2 | taskwarrior-2.6's `install.sh`: the task2 deb, sha256 checked | `install.sh` builds it into `~/.local` (no sudo; it names missing build tools) |
+| tw-web's Python packages | `tw -I tw-web`: `pip install -r requirements.txt` (no compiler needed on `s5`; `clang` only if a build fails) | `tw -I tw-web`: as the user, or a venv where the system's Python is managed (PEP 668) |
 | Opening URLs and files | `termux-open-url`, `termux-open` (`termux-tools`, part of Termux) | `xdg-open` |
 | Apps you install | Termux (F-Droid), optionally Termux:Widget, a browser | none |
 | Tools that hooks call (`nb`, `hledger`) | not installed; `check` names the hooks that need them | whatever is there |
@@ -345,7 +345,7 @@ remote is an argument, so the repo can be public.
 | `init` step | Automatic? |
 |---|---|
 | Termux packages (`python git openssh`) | yes (`pkg install`), once the bootstrap has python |
-| Taskwarrior 2.6.2 | yes: fetch the gittw deb, check its pinned sha256, `dpkg -i`; a 3.x already installed gets a loud warning |
+| Taskwarrior 2.6.2 | yes: taskwarrior-2.6's `install.sh` (Termux: the task2 deb, sha256 checked; Linux: a build into `~/.local`). A 3.x is replaced only if you say yes (tasks exported first); kept, it gets a loud warning |
 | SSH key | yes, if there is none |
 | Key on GitHub / Codeberg | **you**: it prints the key and the `gh ssh-key add` line for another station, then waits for `ssh -T` to succeed |
 | Clone `~/.task`, set push URLs | yes (push URLs taken from `--push`, or asked) |

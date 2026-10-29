@@ -49,10 +49,8 @@ Exit 0 ok, 1 warnings, 2 failures. Standard library only.
 import argparse
 import base64
 import datetime as dt
-import hashlib
 import json
 import os
-import platform
 import re
 import shlex
 import shutil
@@ -64,7 +62,7 @@ import sys
 import urllib.request
 from pathlib import Path
 
-__version__ = '0.8.2'
+__version__ = '0.8.3'
 
 OK, DONE, WOULD, SKIP, WARN, FAIL, YOU = 'ok', 'done', 'would', 'skip', 'warn', 'fail', 'you'
 
@@ -74,9 +72,8 @@ TW3_WARNING = '''\
   !!! with 3.x: its data lives in a different format, and sync works differently. Some
   !!! of it may work. You're on your own: keep a backup, and expect surprises.'''
 
-# Facts about the tool, not about you: mobilize.rc (or local.rc) can override each one.
-TASK_DEB_URL = 'https://raw.githubusercontent.com/linuxcaffe/taskwarrior-2.6/main/termux/task2_2.6.2-3_aarch64.deb'
-TASK_DEB_SHA256 = 'bd80e37006fc59a4faaba4a74d99883bc1e4141c711c5fc4775625f667b594a8'
+# Facts about the tool, not about you: mobilize.rc (or local.rc) can override WEB_DIR.
+TASK_INSTALLER = 'https://raw.githubusercontent.com/linuxcaffe/taskwarrior-2.6/main/install.sh'
 WEB_DIR = '~/.local/share/tw-web'
 WEB_PORT = 5000
 WEB_MODULES = 'flask, flask_cors, flask_sock, tabulate'
@@ -1329,41 +1326,30 @@ class Init:
         return self.act('packages', f"pkg install {' '.join(missing)}", install)
 
     def step_task(self):
+        """Taskwarrior 2.6.2 comes from taskwarrior-2.6's install.sh (0.8.3): the task2 deb on Termux, a build
+        into ~/.local on Linux; a 3.x is replaced only if you say yes. It's ~/.task/scripts/taskwarrior-2.6
+        once ~/.task is cloned (tw -I taskwarrior keeps it there); before that, it's downloaded."""
         v = task_version()
         if v and v.startswith('2.6.'):
             self.note(OK, 'task', v)
             return True
-        if v:
+        def install():
+            script = task_dir() / 'scripts' / 'taskwarrior-2.6'
+            if not script.exists():
+                cache = Path.home() / '.cache' / 'mobilize'
+                cache.mkdir(parents=True, exist_ok=True)
+                script = cache / 'taskwarrior-2.6-install.sh'
+                with urllib.request.urlopen(TASK_INSTALLER, timeout=60) as r:
+                    script.write_bytes(r.read())
+            if subprocess.run(['bash', str(script)]).returncode and not task_version():
+                raise SystemExit('mobilize: Taskwarrior 2.6.2 is not installed (above: why, and what to do)')
+        if not self.act('task', "install Taskwarrior 2.6.2 (taskwarrior-2.6's install.sh)", install):
+            return False
+        v = task_version()
+        if v and not v.startswith('2.6.'):    # 3.x, kept: install.sh asked, and the answer was no
             self.note(WARN, 'task', f'Taskwarrior {v}: not 2.6.x, see the warning below. Carrying on.')
             self.out(TW3_WARNING.format(v=v))
-            return True
-        if not is_termux():
-            self.note(FAIL, 'task', 'Taskwarrior is not installed: install 2.6.x from your distribution')
-            return False
-        s = settings()
-        url = s.get('mobilize.task.deb') or TASK_DEB_URL
-        if not s.get('mobilize.task.deb') and platform.machine() not in ('aarch64', 'arm64'):
-            self.note(FAIL, 'task', f'the task2 deb is built for aarch64; this device is {platform.machine()}. '
-                                    'Build Taskwarrior 2.6.2 for it, or name your own deb in mobilize.rc '
-                                    '(mobilize.task.deb, mobilize.task.sha256)')
-            return False
-        want = s.get('mobilize.task.sha256') or TASK_DEB_SHA256
-        def install():
-            cache = Path.home() / '.cache' / 'mobilize'
-            cache.mkdir(parents=True, exist_ok=True)
-            deb = cache / url.rsplit('/', 1)[-1]
-            with urllib.request.urlopen(url, timeout=120) as r:
-                data = r.read()
-            got = hashlib.sha256(data).hexdigest()
-            if got != want:
-                raise SystemExit(f'mobilize: {url} has sha256 {got}, expected {want}: not installing it')
-            deb.write_bytes(data)
-            # apt installs the deb's dependencies too (libgnutls, libuuid…); dpkg -i would just fail
-            argv = ['apt', 'install', '-y', str(deb)] if shutil.which('apt') else ['dpkg', '-i', str(deb)]
-            r = subprocess.run(argv)
-            if r.returncode or not (task_version() or '').startswith('2.6.'):
-                raise SystemExit(f"mobilize: {' '.join(argv[:2])} failed, or task still is not 2.6.x")
-        return self.act('task', f'install Taskwarrior 2.6.2 ({url.rsplit("/", 1)[-1]}, sha256 checked)', install)
+        return True
 
     def _data_url(self):
         return fetch_url() if (task_dir() / '.git').exists() else self.data
@@ -1886,7 +1872,7 @@ def checks():
     elif v:
         add('task', WARN, f'{v}: NOT 2.6.x. Untested with the fleet; use at your own risk')
     else:
-        add('task', FAIL, 'not installed')
+        add('task', FAIL, 'not installed: tw -I taskwarrior (or mobilize init)')
 
     if not (d / '.git').exists():
         add('repo', FAIL, f'{d} is not a git repo: mobilize init --data <URL>')
@@ -2012,7 +1998,7 @@ def checks():
                 add('autostart', WARN, ('~/.bashrc has an older autostart block' if state else
                                         'opening Termux won\'t start tw-web if Android stopped it') + ': mobilize init')
     else:
-        add('tw-web', OK if not is_termux() else WARN, f'not installed at {wd}')
+        add('tw-web', OK if not is_termux() else WARN, f'not installed at {wd} (tw -I tw-web)')
 
     if is_termux():
         conf = sshd_settings()
