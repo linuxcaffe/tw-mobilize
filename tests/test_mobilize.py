@@ -908,3 +908,48 @@ def test_check_warns_when_the_running_server_lacks_termux_exec(home, remote, mon
     assert any(n == 'tw-web' and s == mobilize.WARN and 'LD_PRELOAD' in d for n, s, d in mobilize.checks())
     monkeypatch.setattr(mobilize, 'server_environ', lambda pidfile=None: {'LD_PRELOAD': '/p/lib.so'})
     assert not any('LD_PRELOAD' in d for n, s, d in mobilize.checks())
+
+
+# ── tw-web comes from tw -I tw-web (0.8.2) ───────────────────────────────────
+
+def _web_init(notes):
+    init = mobilize.Init.__new__(mobilize.Init)
+    init.dry, init.web, init.worst, init.out = False, True, mobilize.OK, lambda *a: None
+    init.note = lambda status, step, detail: notes.append((status, detail))
+    init.act = lambda step, detail, fn: (notes.append(('act', detail)), fn(), True)[2]
+    return init
+
+
+def test_step_web_runs_tw_install_tw_web(home, monkeypatch):
+    web = home / '.local' / 'share' / 'tw-web'
+    monkeypatch.setattr(mobilize, 'web_dir', lambda s=None: web)
+    tw = home / '.task' / 'scripts' / 'tw'
+    tw.parent.mkdir(parents=True)
+    log = home / 'tw.log'
+    tw.write_text(f'#!/bin/sh\necho "$*" >> {log}\nmkdir -p {web} && touch {web}/app.py\n')
+    tw.chmod(0o755)
+    notes = []
+    assert _web_init(notes).step_web()
+    assert log.read_text() == '-I tw-web\n'
+    assert ('act', f'tw -I tw-web (into {web})') in notes
+
+
+def test_step_web_leaves_a_working_tw_web_alone(home, monkeypatch):
+    web = home / 'dev' / 'tw-web'
+    web.mkdir(parents=True)
+    (web / 'app.py').write_text('')
+    monkeypatch.setattr(mobilize, 'web_dir', lambda s=None: web)
+    monkeypatch.setattr(mobilize, 'run', lambda argv, **k: subprocess.CompletedProcess(argv, 0, '', ''))
+    notes = []
+    assert _web_init(notes).step_web()
+    assert notes == [(mobilize.OK, f'{web} (its Python packages import)')]
+
+
+def test_step_web_fails_when_tw_does(home, monkeypatch):
+    monkeypatch.setattr(mobilize, 'web_dir', lambda s=None: home / 'nope')
+    tw = home / '.task' / 'scripts' / 'tw'
+    tw.parent.mkdir(parents=True)
+    tw.write_text('#!/bin/sh\nexit 1\n')
+    tw.chmod(0o755)
+    with pytest.raises(SystemExit, match='tw -I tw-web failed'):
+        _web_init([]).step_web()

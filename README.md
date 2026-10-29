@@ -33,11 +33,11 @@ that's Termux, not mobilize. Run `termux-change-repo` (pick a mirror group near 
 `pkg upgrade`, then the three lines again. Termux is a rolling release: a long-unused install needs
 upgrading before it installs anything.
 
-**Status: 0.8.1, in daily use on one phone** (`s5`, since 2026-10-22). Commands: `init`, `check`
+**Status: 0.8.2, in daily use on one phone** (`s5`, since 2026-10-22). Commands: `init`, `check`
 (`--hooks`: the hook pre-test), `hooks` (each station's chosen hooks), `android` (the phone's own
 settings, step by step), `stations`, `-e`; tested with pytest in a fake home folder. The Termux launcher
 restarts tw-web when it dies, and opening Termux starts it. With nb installed, `init` also adds
-home-screen buttons for quick nb notes (0.7.0), and with hledger-web installed, a button for it (0.7.2); and t-quick clocks in and out of the timelog (0.8.0). The task2 deb comes from [taskwarrior-2.6](https://github.com/linuxcaffe/taskwarrior-2.6) (0.8.1). This README also keeps what was learned
+home-screen buttons for quick nb notes (0.7.0), and with hledger-web installed, a button for it (0.7.2); and t-quick clocks in and out of the timelog (0.8.0). The task2 deb comes from [taskwarrior-2.6](https://github.com/linuxcaffe/taskwarrior-2.6) (0.8.1), tw-web from `tw -I tw-web` (0.8.2; `mobilize.web.repo` is no longer read). This README also keeps what was learned
 setting up the first phone (2026-10-21/22): "Problems found" is the record.
 
 ## TL;DR
@@ -71,7 +71,7 @@ setting up the first phone (2026-10-21/22): "Problems found" is the record.
 | `~/.taskrc` | symlink to `.task/.taskrc` | the shared config |
 | `~/.task/local.rc` | written per station, untracked | `gittw.device`, `tw.platforms`, `hooks=off` until hooks are tested, then `mobilize.hooks` and `hooks.location` (`mobilize hooks --set`) |
 | `PATH` | `~/.bashrc`: `export PATH="$HOME/.task/scripts:$PATH"` | gives `tw`, `gittw`, the fleet scripts |
-| tw-web | `git clone` of tw-web, `pip install -r requirements.txt`, `python app.py` | serves `localhost:5000` only; open it in the browser and install it as an app |
+| tw-web | `tw -I tw-web` (0.8.2: a `git clone`, Codeberg else GitHub, and `pip install -r requirements.txt`), `python app.py` | serves `localhost:5000` only; open it in the browser and install it as an app |
 | Launcher | `~/.shortcuts/tw-web` (Termux) | starts tw-web in a restart loop, then opens the browser; `--start` only starts it |
 | Autostart | a marked block in `~/.bashrc` (Termux) | opening Termux starts tw-web if it isn't running |
 | nb quick notes | `~/.shortcuts/nb-note`, `~/.shortcuts/tasks/nb-quick`, `~/bin/termux-url-opener` (Termux, once `nb` is installed) | home-screen buttons for [nb](https://github.com/xwmx/nb) (`npm install -g nb.sh`): `nb-note` asks in a terminal, `nb-quick` in Android popups (`pkg install termux-api`), and Share → Termux saves what was shared. The title becomes the filename, so a file browser shows real names. nb's logo is their widget icon (`~/.shortcuts/icons/`) |
@@ -290,14 +290,13 @@ The bootstrap runs before anything exists, so settings come from four places:
 | **Command-line options** | `--data <fetch URL>`, `--station s5`, `--platform mobile` | needed before the clone exists |
 | **`mobilize.rc`** (tracked, travels with the clone) | the recipe shared by every station: push URLs, the list of stations | written once; each new station reads it |
 | **`local.rc`** (untracked) | this station: `gittw.device`, `tw.platforms`, `hooks.location`, and overrides such as `mobilize.web.dir` | the only part that differs per device |
-| **Built into the tool** | the task2 deb's URL and sha256, Termux package names, tw-web's public repo, tw-web's default folder | facts about the tool, not about you; `mobilize.rc` or `local.rc` can override them |
+| **Built into the tool** | the task2 deb's URL and sha256, Termux package names, tw-web's default folder (its repo is `tw -I tw-web`'s) | facts about the tool, not about you; `mobilize.rc` or `local.rc` can override them |
 
 A sketch of `mobilize.rc` (yours lives in your private gittw repo; nothing private is in the tool):
 
 ```
 # mobilize.rc: how to set up a station. Shared; `mobilize init` reads it after cloning.
 mobilize.data.push = git@codeberg.org:<you>/<data>.git, git@github.com:<you>/<data>.git
-mobilize.web.repo  = https://codeberg.org/linuxcaffe/tw-web.git
 mobilize.station.yoga.platform = desktop
 mobilize.station.s5.platform   = mobile
 mobilize.station.s5.ssh        = s5          # Host alias: direct sync route, live status
@@ -354,7 +353,7 @@ remote is an argument, so the repo can be public.
 | `local.rc` | yes, from the station name and platform, with `hooks=off` |
 | Gitignored include targets | yes, created empty |
 | `PATH` in `~/.bashrc` | yes, once |
-| tw-web | yes: clone, `pip install` (asks before installing `clang`) |
+| tw-web | yes: `tw -I tw-web` (clone, `pip install`) |
 | Android's own settings (background running, recents lock, widget, overlay) | **you**, with `mobilize android` opening each screen; `init` ends by pointing at it |
 | Launcher | yes: a Termux:Widget shortcut in `~/.shortcuts/` that restarts tw-web when it dies (the widget app itself is **you**, from F-Droid); an unedited older launcher is replaced |
 | Autostart | yes: a marked block in `~/.bashrc`, so opening Termux starts tw-web (`mobilize.web.autostart = no` leaves it out) |

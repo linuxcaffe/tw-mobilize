@@ -64,7 +64,7 @@ import sys
 import urllib.request
 from pathlib import Path
 
-__version__ = '0.8.1'
+__version__ = '0.8.2'
 
 OK, DONE, WOULD, SKIP, WARN, FAIL, YOU = 'ok', 'done', 'would', 'skip', 'warn', 'fail', 'you'
 
@@ -77,7 +77,6 @@ TW3_WARNING = '''\
 # Facts about the tool, not about you: mobilize.rc (or local.rc) can override each one.
 TASK_DEB_URL = 'https://raw.githubusercontent.com/linuxcaffe/taskwarrior-2.6/main/termux/task2_2.6.2-3_aarch64.deb'
 TASK_DEB_SHA256 = 'bd80e37006fc59a4faaba4a74d99883bc1e4141c711c5fc4775625f667b594a8'
-WEB_REPO = 'https://codeberg.org/linuxcaffe/tw-web.git'
 WEB_DIR = '~/.local/share/tw-web'
 WEB_PORT = 5000
 WEB_MODULES = 'flask, flask_cors, flask_sock, tabulate'
@@ -334,11 +333,10 @@ mobilize.data.push = {push}
 
 # ── tw-web ────────────────────────────────────────────────────────────────────
 #
-# Where tw-web is cloned from. https needs no key, so a station can run tw-web without
-# being able to push to it; a station where you develop tw-web switches its own clone
-# to SSH. The folder it goes in is per station: mobilize.web.dir in local.rc (default
-# {WEB_DIR}).
-mobilize.web.repo = {WEB_REPO}
+# tw-web comes from `tw -I tw-web` (https from Codeberg, else GitHub: no key needed, so a
+# station can run tw-web without being able to push to it). The folder it goes in is per
+# station: mobilize.web.dir in local.rc (default {WEB_DIR}); a folder named there is used
+# as it is (a development checkout).
 
 # ── The stations ──────────────────────────────────────────────────────────────
 #
@@ -1630,42 +1628,26 @@ class Init:
         return self.act('commit', f"{', '.join(rels)} (not pushed: gittw sync does that)", commit)
 
     def step_web(self):
+        """tw-web is tw's to install (tw -I tw-web, 0.8.2): it clones it (Codeberg, else GitHub) into
+        mobilize.web.dir or ~/.local/share/tw-web and installs its Python packages."""
         if not self.web:
             self.note(SKIP, 'tw-web', '--no-web')
             return True
-        s = settings()
-        d, repo = web_dir(s), s.get('mobilize.web.repo') or WEB_REPO
-        if (d / 'app.py').exists():
-            self.note(OK, 'tw-web', f'{d}')
-        elif d.exists() and any(d.iterdir()):
-            self.note(FAIL, 'tw-web', f'{d} exists and is not tw-web')
-            return False
-        else:
-            def clone():
-                d.parent.mkdir(parents=True, exist_ok=True)
-                r = run(['git', 'clone', repo, str(d)])
-                if r.returncode:
-                    raise SystemExit(f'mobilize: git clone {repo} failed: {r.stderr.strip()}')
-            self.act('tw-web', f'git clone {repo} {d}', clone)
-        if self.dry and not (d / 'app.py').exists():
-            self.note(WOULD, 'tw-web', 'install its Python packages')
-            return True
+        d = web_dir()
         py = web_python(d)
-        if run([py, '-c', f'import {WEB_MODULES}']).returncode == 0:
-            self.note(OK, 'tw-web', f'its Python packages import ({py})')
+        if (d / 'app.py').exists() and run([py, '-c', f'import {WEB_MODULES}']).returncode == 0:
+            self.note(OK, 'tw-web', f'{d} (its Python packages import)')
             return True
+        tw = task_dir() / 'scripts' / 'tw'          # PATH may not have it yet: step_path edits ~/.bashrc
+        tw = str(tw) if tw.exists() else shutil.which('tw')
+        if not tw:
+            self.note(FAIL, 'tw-web', 'tw not found: it installs tw-web (curl … install.sh | bash, '
+                                      'https://github.com/linuxcaffe/awesome-taskwarrior)')
+            return False
         def install():
-            nonlocal py
-            if not is_termux() and run([py, '-m', 'pip', 'install', '--dry-run', '-q', 'pip']).returncode:
-                venv = d / '.venv'
-                if run([sys.executable or 'python3', '-m', 'venv', str(venv)]).returncode:
-                    raise SystemExit(f'mobilize: python3 -m venv {venv} failed (Debian/Ubuntu: apt install python3-venv)')
-                py = str(venv / 'bin' / 'python')
-            r = subprocess.run([py, '-m', 'pip', 'install', '-q', '-r', str(d / 'requirements.txt')])
-            if r.returncode:
-                hint = ' (Termux: pkg install clang, then run init again)' if is_termux() else ''
-                raise SystemExit(f'mobilize: pip install failed{hint}')
-        return self.act('tw-web', f'pip install -r {d / "requirements.txt"}', install)
+            if subprocess.run([tw, '-I', 'tw-web']).returncode:
+                raise SystemExit('mobilize: tw -I tw-web failed (above: why)')
+        return self.act('tw-web', f'tw -I tw-web (into {d})', install)
 
     def step_launcher(self):
         if not self.web or not is_termux():
