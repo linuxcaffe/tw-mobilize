@@ -64,7 +64,7 @@ import sys
 import urllib.request
 from pathlib import Path
 
-__version__ = '0.8.0'
+__version__ = '0.8.1'
 
 OK, DONE, WOULD, SKIP, WARN, FAIL, YOU = 'ok', 'done', 'would', 'skip', 'warn', 'fail', 'you'
 
@@ -75,7 +75,7 @@ TW3_WARNING = '''\
   !!! of it may work. You're on your own: keep a backup, and expect surprises.'''
 
 # Facts about the tool, not about you: mobilize.rc (or local.rc) can override each one.
-TASK_DEB_URL = 'https://raw.githubusercontent.com/linuxcaffe/gittw/main/task2_2.6.2-3_aarch64.deb'
+TASK_DEB_URL = 'https://raw.githubusercontent.com/linuxcaffe/taskwarrior-2.6/main/termux/task2_2.6.2-3_aarch64.deb'
 TASK_DEB_SHA256 = 'bd80e37006fc59a4faaba4a74d99883bc1e4141c711c5fc4775625f667b594a8'
 WEB_REPO = 'https://codeberg.org/linuxcaffe/tw-web.git'
 WEB_DIR = '~/.local/share/tw-web'

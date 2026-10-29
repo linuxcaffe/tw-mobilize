@@ -33,11 +33,11 @@ that's Termux, not mobilize. Run `termux-change-repo` (pick a mirror group near 
 `pkg upgrade`, then the three lines again. Termux is a rolling release: a long-unused install needs
 upgrading before it installs anything.
 
-**Status: 0.8.0, in daily use on one phone** (`s5`, since 2026-10-22). Commands: `init`, `check`
+**Status: 0.8.1, in daily use on one phone** (`s5`, since 2026-10-22). Commands: `init`, `check`
 (`--hooks`: the hook pre-test), `hooks` (each station's chosen hooks), `android` (the phone's own
 settings, step by step), `stations`, `-e`; tested with pytest in a fake home folder. The Termux launcher
 restarts tw-web when it dies, and opening Termux starts it. With nb installed, `init` also adds
-home-screen buttons for quick nb notes (0.7.0), and with hledger-web installed, a button for it (0.7.2); and t-quick clocks in and out of the timelog (0.8.0). This README also keeps what was learned
+home-screen buttons for quick nb notes (0.7.0), and with hledger-web installed, a button for it (0.7.2); and t-quick clocks in and out of the timelog (0.8.0). The task2 deb comes from [taskwarrior-2.6](https://github.com/linuxcaffe/taskwarrior-2.6) (0.8.1). This README also keeps what was learned
 setting up the first phone (2026-10-21/22): "Problems found" is the record.
 
 ## TL;DR
@@ -189,7 +189,7 @@ Termux from F-Droid. Each step was done once on `s5`; the problems found are in 
 ```bash
 # 1. Taskwarrior 2.6.2 (once)
 pkg install python git openssh
-curl -fLO https://raw.githubusercontent.com/linuxcaffe/gittw/main/task2_2.6.2-3_aarch64.deb
+curl -fLO https://raw.githubusercontent.com/linuxcaffe/taskwarrior-2.6/main/termux/task2_2.6.2-3_aarch64.deb
 sha256sum task2_2.6.2-3_aarch64.deb   # bd80e37006fc59a4faaba4a74d99883bc1e4141c711c5fc4775625f667b594a8
 dpkg -i task2_2.6.2-3_aarch64.deb && task --version
 
