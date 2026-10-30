@@ -765,6 +765,47 @@ def test_an_untouched_older_m_sync_is_replaced(home, tmp_path, monkeypatch):
     assert job.read_text() == mobilize.M_SYNC_JOB_TEXT and os.access(job, os.X_OK)
 
 
+def test_init_collects_the_phone_data_in_mobile(home, monkeypatch):
+    monkeypatch.setenv('TERMUX_VERSION', '0.118')
+    monkeypatch.delenv('NB_DIR', raising=False)
+    notes = []
+    init = _termux_init(notes)
+    init.station = 's5'
+    assert init.step_collect() and notes[-1][0] == mobilize.SKIP, 'no shared mobile notebook yet'
+
+    mobile = home / '.nb' / 'mobile'
+    subprocess.run(['git', 'init', '-q', str(mobile)], check=True)
+    subprocess.run(['git', '-C', str(mobile), 'remote', 'add', 'origin', 'git@x:y.git'], check=True)
+    (mobile / 'accounts.journal').write_text('account Assets:cash\n')
+    old = home / '.hledger.journal'
+    old.write_text('\n2026-10-30 Gas\n    Expenses:auto:fuel  50\n    assets:cash\n')
+    t = home / '.task' / 'scripts' / 't'
+    t.parent.mkdir(parents=True, exist_ok=True)
+    t.write_text('#!/bin/sh\n')
+    clock = home / '.task' / 'time' / 'tw.timeclock'
+    clock.parent.mkdir(parents=True)
+    clock.write_text('i 2026/10/30 09:00:00 work\n')
+    notes.clear()
+    assert init.step_collect()
+    journal = mobile / 's5.journal'
+    text = journal.read_text()
+    assert 'include accounts.journal' in text and text.rstrip().endswith('assets:cash'), 'the entries moved'
+    assert old.is_symlink() and old.resolve() == journal.resolve()
+    assert list(home.glob('.hledger.journal.pre-mobilize-*')), 'the old file is kept aside'
+    assert notes[-1][0] == mobilize.WARN and 'clocked in' in notes[-1][1], "t's files wait for a clock-out"
+    assert 'timelog.file' not in mobilize.read_rc(mobilize.local_rc())
+
+    clock.write_text('i 2026/10/30 09:00:00 work\no 2026/10/30 10:00:00\n')
+    notes.clear()
+    assert init.step_collect()
+    rc = mobilize.read_rc(mobilize.local_rc())
+    assert rc['timelog.file'] == '~/.nb/mobile/s5.timeclock'
+    assert rc['timelog.timedot_file'] == '~/.nb/mobile/s5.timedot'
+    notes.clear()
+    assert init.step_collect() and all(s == mobilize.OK for s, _ in notes), notes
+    assert journal.read_text() == text, 'nothing moved twice'
+
+
 def test_m_sync_is_valid_bash():
     r = subprocess.run(['bash', '-n'], input=mobilize.M_SYNC_TEXT, capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
@@ -777,8 +818,9 @@ def test_m_sync_between_two_stations(tmp_path):
     is unrelated to the remote's is refused without touching the remote."""
     bin_ = tmp_path / 'bin'
     bin_.mkdir()
-    for tool in ('bash', 'python3'):
-        (bin_ / tool).symlink_to(shutil.which(tool))
+    for tool in ('bash', 'python3', 'hledger'):
+        if shutil.which(tool):
+            (bin_ / tool).symlink_to(shutil.which(tool))
     (bin_ / 'nb').symlink_to(os.path.realpath(shutil.which('nb')))
     script = tmp_path / 'm-sync'
     script.write_text(mobilize.M_SYNC_TEXT)
@@ -819,6 +861,22 @@ def test_m_sync_between_two_stations(tmp_path):
     assert r.returncode == 0 and 'mob ✓' in r.stdout, "a scheduled (--quiet) run"
     assert {p.name for p in (a / 'mob').glob('*.md')} == {'from_a.md', 'plain.md'}
     assert not (a / 'home' / '.m-sync.json').exists(), 'home has no remote: not synced'
+
+    if shutil.which('hledger'):
+        journal = b / 'mob' / 'B.journal'
+        remote_head = lambda: subprocess.run(['git', '-C', str(remote), 'rev-parse', 'mob'],
+                                             capture_output=True, text=True).stdout
+        journal.write_text('2026-10-30 Gas\n    expenses:fuel  50\n    assets:cash\n')
+        assert sync_b().returncode == 0, 'a journal that parses is pushed'
+        journal.write_text('2026-10-30 Gas\n    expenses:fuel  50\n    assets:cash  -40\n')
+        before = remote_head()
+        r = sync_b()
+        assert r.returncode == 1 and 'B.journal fails hledger check' in r.stdout, r.stdout
+        assert remote_head() == before, "one that doesn't stays here"
+        journal.write_text('2026-10-30 Gas\n    expenses:fuel  50\n    assets:cash  -50\n')
+        assert sync_b().returncode == 0, 'fixed, it goes'
+        sync_a()
+        assert (a / 'mob' / 'B.journal').read_text().endswith('-50\n')
 
     (a / 'mob' / 'from_a.md').write_text('A edit\n')
     (b / 'mob' / 'from_a.md').write_text('B edit\n')

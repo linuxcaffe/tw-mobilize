@@ -63,7 +63,7 @@ import sys
 import urllib.request
 from pathlib import Path
 
-__version__ = '0.9.2'
+__version__ = '0.10.0'
 
 OK, DONE, WOULD, SKIP, WARN, FAIL, YOU = 'ok', 'done', 'would', 'skip', 'warn', 'fail', 'you'
 
@@ -761,13 +761,14 @@ exec "$HOME/.shortcuts/tasks/nb-quick" "$1"
 
 
 # sha256 of scripts older mobilizes wrote: init replaces one of these, since nobody edited it,
-# and leaves any other text alone. nb-note, nb-quick: 0.7.0-0.8.3, 0.9.0-0.9.1; m-sync: 0.9.0-0.9.1.
+# and leaves any other text alone. nb-note, nb-quick: 0.7.0-0.8.3, 0.9.0-0.9.1; m-sync: 0.9.0-0.9.1, 0.9.2.
 OLD_SCRIPTS = {
     'nb-note': {'042e6eb833ee00b0daed8df55b9d0aea2e6a27e735eb08085012e46b9afaa9ec',
                 '0b5b8c74962c916772ad2ff08f4b0137d44170d8291d40bb619aab9d3941935c'},
     'nb-quick': {'19e5b53c4d5e684ff4eb118cab407edbb76fc182b200c1765b690e35bffd4222',
                  'eb228cbc5530e3d286137ee489ef15718a3edc4ff1467217753d950f006545bf'},
-    'm-sync': {'88cba17329d8bd21fa674886d7a185005236bce35debd07c416348593e4c8659'},
+    'm-sync': {'88cba17329d8bd21fa674886d7a185005236bce35debd07c416348593e4c8659',
+               '6777b9564e21d36a7ad9899b6ad2df5884606fa295fd5ebc858fcdc8d0c6dcdc'},
 }
 
 
@@ -1301,6 +1302,8 @@ M_SYNC_TEXT = r'''#!/data/data/com.termux/files/usr/bin/bash
 #      remote's version keeps the name and this phone's is saved beside it as
 #      note.conflict-<station>.md, so no conflict markers ever reach a note
 #   3. a status file, .m-sync.json, in the notebook folder (kept out of git) for other apps
+# Journals (*.journal, *.timeclock, *.timedot) must pass a plain `hledger check` before they're
+# pushed; one that doesn't stays here, red, until it's fixed.
 # A toast says how it went. The widget icon turns green (synced), amber (offline: changes wait)
 # or red (a conflict copy to look at, or a problem: a notification says which). A notebook whose
 # branch doesn't track origin/<its own name>, or whose history has nothing in common with the
@@ -1423,6 +1426,18 @@ sync_notebook() {
     if [ -n "$marked" ]; then
         state=error msg="conflict markers in ${marked//$dir\//}: not pushed"; return
     fi
+    # never push a journal hledger can't read (a plain check: the phone collects, it isn't strict)
+    if [ -x "$P/hledger" ]; then
+        local f err
+        while IFS= read -r f; do
+            case $f in *.journal|*.timeclock|*.timedot) [ -f "$dir/$f" ] || continue ;; *) continue ;; esac
+            if ! err=$(cd "$dir" && "$P/hledger" -f "$f" check 2>&1); then
+                log "$name check $f: $err"
+                state=error msg="$f fails hledger check, not pushed: $(printf '%s\n' "$err" | grep -m1 .)"
+                return
+            fi
+        done < <(g diff --name-only --diff-filter=AM "origin/$name" HEAD)
+    fi
 
     sent=$(g rev-list --count "origin/$name..HEAD")
     if [ "$sent" -gt 0 ] && ! out=$(timeout 60 git -C "$dir" push -q origin "HEAD:$name" 2>&1); then
@@ -1515,6 +1530,31 @@ fi
 [ "$worst" = error ] && exit 1
 exit 0
 '''
+
+# ── what a phone collects (Termux) ────────────────────────────────────────────
+# A phone is a data-collection station: its hledger entries and t's time go to files named
+# after it in the shared notebook `mobile`, which only it writes and m-sync carries; the desktop
+# includes them as they are (never merges them into its own). One writer per file: no conflicts.
+
+COLLECT_NOTEBOOK = 'mobile'
+
+
+def collect_journal_text(station, accounts):
+    head = (f'; {station}.journal: hledger entries collected on {station}. Only {station} writes here;\n'
+            f'; the desktop includes it as it is. Written by `mobilize init`; add entries below.\n')
+    if accounts:   # the desktop's account names (mobile/accounts.journal), for hledger-web's suggestions
+        head += 'include accounts.journal\n'
+    return head + '\n'
+
+
+def last_clock(path):
+    """'i' or 'o', the last clock line of a timeclock file, or '' without one."""
+    try:
+        lines = [l for l in Path(path).read_text(errors='replace').splitlines() if l[:2] in ('i ', 'o ')]
+    except OSError:
+        return ''
+    return lines[-1][0] if lines else ''
+
 
 # The scheduled runs: Termux:API's job scheduler runs a script with no arguments, hence this.
 M_SYNC_JOB_TEXT = r'''#!/data/data/com.termux/files/usr/bin/sh
@@ -2176,7 +2216,7 @@ class Init:
             if have == text:
                 self.note(OK, 'm-sync', f'{path}')
             elif is_old_script(path, have):
-                self.act('m-sync', f'{path}: the newer one (--quiet, for the scheduled runs)', write)
+                self.act('m-sync', f'{path}: the newer one', write)
             else:
                 self.note(WARN, 'm-sync', f'{path} (not the one mobilize writes: left as it is)')
         self.schedule_m_sync(Path.home() / '.termux' / 'm-sync-job')
@@ -2203,6 +2243,68 @@ class Init:
             self.note(OK, 'm-sync', "nb's auto_sync is off")
         if not shutil.which('termux-toast'):
             self.note(YOU, 'm-sync', "its toasts and icon need Termux:API: pkg install termux-api")
+        return True
+
+    def step_collect(self):
+        """The phone's own data files in the shared notebook `mobile`: <station>.journal (with the
+        old ~/.hledger.journal's entries, which then points at it) and, through local.rc, t's
+        <station>.timeclock and <station>.timedot."""
+        if not is_termux():
+            self.note(SKIP, 'collect', 'Termux only')
+            return True
+        notebook = Path(os.environ.get('NB_DIR') or Path.home() / '.nb') / COLLECT_NOTEBOOK
+        if COLLECT_NOTEBOOK not in (shared_notebooks(notebook.parent) if notebook.parent.is_dir() else []):
+            self.note(SKIP, 'collect', f'no shared notebook {COLLECT_NOTEBOOK} '
+                                       f'(nb notebooks add {COLLECT_NOTEBOOK} <url> {COLLECT_NOTEBOOK})')
+            return True
+        station = self.station or settings().get('gittw.device')
+        if not station:
+            self.note(SKIP, 'collect', 'no station name (gittw.device)')
+            return True
+        journal = notebook / f'{station}.journal'
+        home_journal = Path.home() / '.hledger.journal'
+        old = home_journal.read_text(errors='replace') \
+            if home_journal.is_file() and not home_journal.is_symlink() else ''
+
+        if not journal.exists():
+            text = collect_journal_text(station, (notebook / 'accounts.journal').exists())
+            if old.strip():
+                text += f'; moved from ~/.hledger.journal by mobilize init, {stamp()}\n' + old.lstrip('\n')
+            self.act('collect', f'{journal}' + (' (with the entries from ~/.hledger.journal)' if old.strip() else ''),
+                     lambda: journal.write_text(text))
+        else:
+            self.note(OK, 'collect', f'{journal}')
+            if old.strip():
+                self.note(WARN, 'collect', f'{home_journal} has entries and {journal.name} exists: '
+                                           'move them over by hand, then run init again')
+                old = None
+        if home_journal.is_symlink():
+            if home_journal.resolve() == journal.resolve():
+                self.note(OK, 'collect', f'{home_journal} → {journal.name}')
+            else:
+                self.note(WARN, 'collect', f'{home_journal} points elsewhere: left as it is')
+        elif old is not None:
+            def link():
+                if home_journal.exists():
+                    move_aside(home_journal)
+                home_journal.symlink_to(journal)
+            self.act('collect', f'{home_journal} → {journal} (hledger, hledger-web and add write there)', link)
+
+        if not (Path.home() / '.task' / 'scripts' / 't').exists():
+            self.note(SKIP, 'collect', "no t: its time files aren't moved")
+            return True
+        rc = read_rc(local_rc())
+        want = {'timelog.file': f'~/.nb/{COLLECT_NOTEBOOK}/{station}.timeclock',
+                'timelog.timedot_file': f'~/.nb/{COLLECT_NOTEBOOK}/{station}.timedot'}
+        if all(rc.get(k) == v for k, v in want.items()):
+            self.note(OK, 'collect', f"t writes {station}.timeclock and {station}.timedot")
+            return True
+        current = Path(str(rc.get('timelog.file') or '~/.task/time/tw.timeclock').replace('~', str(Path.home()), 1))
+        if last_clock(current) == 'i':
+            self.note(WARN, 'collect', f"t is clocked in ({current.name}): clock out, then run init again")
+            return True
+        self.act('collect', f"t writes ~/.nb/{COLLECT_NOTEBOOK}/{station}.timeclock and .timedot (local.rc)",
+                 lambda: set_local(want, "t's own files on this station (the desktop includes them)"))
         return True
 
     def schedule_m_sync(self, job):
@@ -2239,7 +2341,7 @@ class Init:
         steps = [self.step_identity, self.step_packages, self.step_task, self.step_key, self.step_clone,
                  self.step_push, self.step_git_identity, self.step_merge_driver, self.step_taskrc, self.step_local_rc, self.step_state_files, self.step_hooks, self.step_path,
                  self.step_mobilize_rc, self.step_commit, self.step_web, self.step_launcher,
-                 self.step_icon, self.step_autostart, self.step_nb, self.step_m_sync, self.step_hledger_web, self.step_t_quick]
+                 self.step_icon, self.step_autostart, self.step_nb, self.step_m_sync, self.step_collect, self.step_hledger_web, self.step_t_quick]
         self.out(f'mobilize init{" (dry run: nothing changes)" if self.dry else ""}')
         for step in steps:
             try:
