@@ -63,7 +63,7 @@ import sys
 import urllib.request
 from pathlib import Path
 
-__version__ = '0.9.1'
+__version__ = '0.9.2'
 
 OK, DONE, WOULD, SKIP, WARN, FAIL, YOU = 'ok', 'done', 'would', 'skip', 'warn', 'fail', 'you'
 
@@ -698,7 +698,10 @@ printf "Title: "; read -r title
 printf "Text (empty = open editor): "; read -r text
 set --
 [ -n "$title" ] && set -- --title "$title"
-if [ -n "$text" ]; then nb "${to}add" "$@" --content "$text"; else nb "${to}add" "$@"; fi
+if [ -n "$text" ]; then nb "${to}add" "$@" --content "$text"; else nb "${to}add" "$@"; fi &&
+    [ -x "$HOME/.termux/m-sync-job" ] &&   # m-sync soon, once there's a network
+    /data/data/com.termux/files/usr/bin/termux-job-scheduler --job-id 7302 \
+        --script "$HOME/.termux/m-sync-job" --network any >/dev/null 2>&1
 printf "\nPress Enter to close. "; read -r _
 '''
 
@@ -740,6 +743,9 @@ args=()
 [ -n "$text" ] && args+=(--content "$text")
 if out=$(nb "${to}add" --no-color "${args[@]}" </dev/null 2>&1); then
     "$P/termux-toast" "nb: ${out#Added: }"
+    # m-sync soon, once there's a network; a newer save replaces this request
+    [ -x "$HOME/.termux/m-sync-job" ] && "$P/termux-job-scheduler" --job-id 7302 \
+        --script "$HOME/.termux/m-sync-job" --network any >/dev/null 2>&1
 else
     "$P/termux-toast" -b red "nb add failed: $(printf %s "$out" | tail -n 2)"
 fi
@@ -754,16 +760,19 @@ exec "$HOME/.shortcuts/tasks/nb-quick" "$1"
 '''
 
 
-# sha256 of the nb scripts older mobilizes wrote (0.7.0-0.8.3): init replaces one of these,
-# since nobody edited it, and leaves any other text alone
-NB_OLD_SCRIPTS = {
-    'nb-note': {'042e6eb833ee00b0daed8df55b9d0aea2e6a27e735eb08085012e46b9afaa9ec'},
-    'nb-quick': {'19e5b53c4d5e684ff4eb118cab407edbb76fc182b200c1765b690e35bffd4222'},
+# sha256 of scripts older mobilizes wrote: init replaces one of these, since nobody edited it,
+# and leaves any other text alone. nb-note, nb-quick: 0.7.0-0.8.3, 0.9.0-0.9.1; m-sync: 0.9.0-0.9.1.
+OLD_SCRIPTS = {
+    'nb-note': {'042e6eb833ee00b0daed8df55b9d0aea2e6a27e735eb08085012e46b9afaa9ec',
+                '0b5b8c74962c916772ad2ff08f4b0137d44170d8291d40bb619aab9d3941935c'},
+    'nb-quick': {'19e5b53c4d5e684ff4eb118cab407edbb76fc182b200c1765b690e35bffd4222',
+                 'eb228cbc5530e3d286137ee489ef15718a3edc4ff1467217753d950f006545bf'},
+    'm-sync': {'88cba17329d8bd21fa674886d7a185005236bce35debd07c416348593e4c8659'},
 }
 
 
-def is_old_nb_script(path, text):
-    return hashlib.sha256(text.encode()).hexdigest() in NB_OLD_SCRIPTS.get(path.name, ())
+def is_old_script(path, text):
+    return hashlib.sha256(text.encode()).hexdigest() in OLD_SCRIPTS.get(path.name, ())
 
 
 def nb_scripts():
@@ -1296,10 +1305,14 @@ M_SYNC_TEXT = r'''#!/data/data/com.termux/files/usr/bin/bash
 # or red (a conflict copy to look at, or a problem: a notification says which). A notebook whose
 # branch doesn't track origin/<its own name>, or whose history has nothing in common with the
 # remote's, is left alone (red). Log: $PREFIX/var/log/m-sync.log.
-# Written by `mobilize init`, which leaves it alone once it's edited.
+# Written by `mobilize init`, which leaves it alone once it's edited. init also schedules it
+# (~/.termux/m-sync-job, every 15 minutes when there's a network), and nb-quick asks for a run
+# after each note it saves.
 #
 #   m-sync            sync every shared notebook
 #   m-sync NAME...    just those
+#   m-sync --quiet    the same, for the scheduled runs: waits for a run already going, and
+#                     only toasts when a notebook turns red
 #   m-sync --status   print each one's status file
 P=${M_SYNC_BIN:-/data/data/com.termux/files/usr/bin}   # tests run it on a desktop with their own
 export PATH="$P:$PATH" NB_AUTO_SYNC=0 GIT_TERMINAL_PROMPT=0
@@ -1440,6 +1453,9 @@ json.dump({'tool': 'm-sync', 'station': station, 'checked': now,
 EOF
 }
 
+quiet=
+[ "$1" = --quiet ] && { quiet=1; shift; }
+
 if [ "$1" = --status ]; then
     for name in $(shared); do printf '%s: ' "$name"; cat "$NB_ROOT/$name/$STATUS" 2>/dev/null || echo '(never synced)'; done
     exit 0
@@ -1447,7 +1463,13 @@ fi
 
 LOCK=${TMPDIR:-$P/../tmp}/m-sync.lock
 find "$LOCK" -maxdepth 0 -mmin +10 -exec rmdir {} \; 2>/dev/null   # left by a run Android killed
-mkdir "$LOCK" 2>/dev/null || { toast "m-sync: already running"; exit 0; }
+if [ -n "$quiet" ]; then   # a scheduled run waits its turn (2 minutes at most)
+    locked=
+    for _ in $(seq 24); do mkdir "$LOCK" 2>/dev/null && { locked=1; break; }; sleep 5; done
+    [ -n "$locked" ] || exit 0
+else
+    mkdir "$LOCK" 2>/dev/null || { toast "m-sync: already running"; exit 0; }
+fi
 trap 'rmdir "$LOCK"' EXIT
 
 if [ $# -gt 0 ]; then names=("$@"); else mapfile -t names < <(shared); fi
@@ -1456,10 +1478,11 @@ if [ ${#names[@]} -eq 0 ]; then
     toast "m-sync: no shared notebooks"; exit 0
 fi
 
-worst=ok lines=()
+worst=ok lines=() alert=
 for name in "${names[@]}"; do
-    if [ ! -d "$NB_ROOT/$name/.git" ]; then lines+=("$name: no such notebook"); worst=error; continue; fi
+    if [ ! -d "$NB_ROOT/$name/.git" ]; then lines+=("$name: no such notebook"); worst=error alert=1; continue; fi
     again=
+    before=$(sed -n 's/^ *"state": "\(.*\)",$/\1/p' "$NB_ROOT/$name/$STATUS" 2>/dev/null)
     sync_notebook "$name"
     write_status
     case $state in
@@ -1470,7 +1493,7 @@ for name in "${names[@]}"; do
     lines+=("$line")
     log "$name $state got=$got sent=$sent waiting=$waiting $msg"
     case $state in
-        error|conflict) worst=error ;;
+        error|conflict) worst=error; [ "$state" != "$before" ] && alert=1 ;;
         offline) [ "$worst" = ok ] && worst=offline ;;
     esac
 done
@@ -1481,17 +1504,40 @@ printf '%s\n' "$summary"
 icon=$ICONS/.m-sync-$worst.png
 [ -f "$icon" ] && cp -f "$icon" "$ICONS/m-sync.png"
 if [ "$worst" = error ]; then
-    toast -b red "m-sync: $summary"
-    [ -x "$P/termux-notification" ] && "$P/termux-notification" -i m-sync --icon sync_problem \
+    [ -z "$quiet" ] || [ -n "$alert" ] && toast -b red "m-sync: $summary"
+    [ -x "$P/termux-notification" ] && "$P/termux-notification" -i m-sync --icon sync_problem --alert-once \
         -t "m-sync: needs a look" -c "$summary" \
         --button1 "Sync again" --button1-action "$P/bash $SELF"
 else
-    toast "m-sync: $summary"
+    [ -z "$quiet" ] && toast "m-sync: $summary"
     [ -x "$P/termux-notification-remove" ] && "$P/termux-notification-remove" m-sync
 fi
 [ "$worst" = error ] && exit 1
 exit 0
 '''
+
+# The scheduled runs: Termux:API's job scheduler runs a script with no arguments, hence this.
+M_SYNC_JOB_TEXT = r'''#!/data/data/com.termux/files/usr/bin/sh
+# m-sync-job: what Termux's job scheduler runs (termux-job-scheduler passes no arguments).
+# Written by `mobilize init`.
+exec /data/data/com.termux/files/usr/bin/bash "$HOME/.shortcuts/tasks/m-sync" --quiet
+'''
+M_SYNC_JOB_ID = 7301         # every mobilize.msync.every minutes, when there's a network
+M_SYNC_AFTER_SAVE_ID = 7302  # once, soon after nb-quick saves a note (a newer save replaces it)
+
+
+def m_sync_every(s=None):
+    """Minutes between scheduled m-sync runs (mobilize.msync.every; Android's floor is 15),
+    or 0 for none."""
+    s = settings() if s is None else s
+    raw = str(s.get('mobilize.msync.every', '15')).strip().lower()
+    if raw in ('no', 'off', 'false', '0', ''):
+        return 0
+    try:
+        return max(15, int(raw.rstrip('m')))
+    except ValueError:
+        return 15
+
 
 # m-sync's icons: white arrows on green (synced), amber (offline, changes wait) or red (a
 # conflict copy or a problem). m-sync copies one over icons/m-sync.png after each run.
@@ -2026,8 +2072,8 @@ class Init:
                 have = path.read_text(errors='replace')
                 if have == text:
                     self.note(OK, 'nb', f'{path}')
-                elif is_old_nb_script(path, have):
-                    self.act('nb', f'{path}: the newer one (notes go to `mobile` when there is one)', write)
+                elif is_old_script(path, have):
+                    self.act('nb', f'{path}: the newer one (notes go to `mobile`; m-sync after a save)', write)
                 else:
                     self.note(WARN, 'nb', f'{path} (not the one mobilize writes: left as it is)')
                 continue
@@ -2117,18 +2163,23 @@ class Init:
         if not nb:
             self.note(SKIP, 'm-sync', 'nb not installed')
             return True
-        path = Path.home() / '.shortcuts' / 'tasks' / 'm-sync'
-        if path.exists():
-            if path.read_text(errors='replace') == M_SYNC_TEXT:
+        for path, text in ((Path.home() / '.shortcuts' / 'tasks' / 'm-sync', M_SYNC_TEXT),
+                           (Path.home() / '.termux' / 'm-sync-job', M_SYNC_JOB_TEXT)):
+            def write(path=path, text=text):
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(text)
+                path.chmod(0o755)
+            if not path.exists():
+                self.act('m-sync', f'{path}', write)
+                continue
+            have = path.read_text(errors='replace')
+            if have == text:
                 self.note(OK, 'm-sync', f'{path}')
+            elif is_old_script(path, have):
+                self.act('m-sync', f'{path}: the newer one (--quiet, for the scheduled runs)', write)
             else:
                 self.note(WARN, 'm-sync', f'{path} (not the one mobilize writes: left as it is)')
-        else:
-            def write():
-                path.parent.mkdir(parents=True, exist_ok=True)
-                path.write_text(M_SYNC_TEXT)
-                path.chmod(0o755)
-            self.act('m-sync', f'{path}', write)
+        self.schedule_m_sync(Path.home() / '.termux' / 'm-sync-job')
         icons = Path.home() / '.shortcuts' / 'icons'
         # amber until the first sync says otherwise
         for name, key in (('.m-sync-ok.png', 'ok'), ('.m-sync-offline.png', 'offline'),
@@ -2153,6 +2204,36 @@ class Init:
         if not shutil.which('termux-toast'):
             self.note(YOU, 'm-sync', "its toasts and icon need Termux:API: pkg install termux-api")
         return True
+
+    def schedule_m_sync(self, job):
+        """The periodic m-sync job (Termux:API's job scheduler): every mobilize.msync.every
+        minutes, only with a network, kept across reboots. Off cancels it."""
+        if not shutil.which('termux-job-scheduler'):
+            self.note(SKIP, 'm-sync', 'no termux-job-scheduler (pkg install termux-api): no scheduled runs')
+            return
+        every = m_sync_every()
+        try:
+            pending = run(['termux-job-scheduler', '--pending'], timeout=30).stdout
+        except subprocess.TimeoutExpired:
+            self.note(WARN, 'm-sync', "termux-job-scheduler didn't answer: is the Termux:API app installed?")
+            return
+        # "Pending Job 7301: /…/m-sync-job    (periodic: 900000ms) (persisted) …"
+        job_line = re.search(rf'^Pending Job {M_SYNC_JOB_ID}: (\S+).*?\(periodic: (\d+)ms\)', pending, re.M)
+        have = job_line is not None
+        if not every:
+            if have:
+                self.act('m-sync', 'scheduled runs off (mobilize.msync.every = off)',
+                         lambda: run(['termux-job-scheduler', '--cancel', '--job-id', str(M_SYNC_JOB_ID)], timeout=30))
+            else:
+                self.note(SKIP, 'm-sync', 'scheduled runs off (mobilize.msync.every = off)')
+            return
+        if have and job_line[1] == str(job) and job_line[2] == str(every * 60_000):
+            self.note(OK, 'm-sync', f'runs every {every} minutes when there is a network')
+            return
+        self.act('m-sync', f'run every {every} minutes when there is a network (survives a reboot)',
+                 lambda: run(['termux-job-scheduler', '--job-id', str(M_SYNC_JOB_ID), '--script', str(job),
+                              '--period-ms', str(every * 60_000), '--network', 'any', '--persisted', 'true'],
+                             timeout=30))
 
     def run(self):
         steps = [self.step_identity, self.step_packages, self.step_task, self.step_key, self.step_clone,

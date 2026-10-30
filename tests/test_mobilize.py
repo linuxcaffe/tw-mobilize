@@ -662,7 +662,7 @@ def test_nb_quick_notes_go_to_mobile_and_old_scripts_are_replaced(home, tmp_path
         (bin_ / tool).chmod(0o755)
     monkeypatch.setenv('PATH', str(bin_))
     old = '#!/bin/sh\n# an nb-quick an older mobilize wrote\n'
-    monkeypatch.setitem(mobilize.NB_OLD_SCRIPTS, 'nb-quick',
+    monkeypatch.setitem(mobilize.OLD_SCRIPTS, 'nb-quick',
                         {mobilize.hashlib.sha256(old.encode()).hexdigest()})
     quick = home / '.shortcuts' / 'tasks' / 'nb-quick'
     note = home / '.shortcuts' / 'nb-note'
@@ -704,6 +704,65 @@ def test_init_on_termux_gives_nb_m_sync_and_turns_nb_auto_sync_off(home, tmp_pat
     assert init.step_m_sync()
     assert script.read_text() == '#!/bin/sh\necho mine\n', 'one edited by hand is left alone'
     assert notes[0][0] == mobilize.WARN
+
+
+def test_m_sync_schedule(home, tmp_path, monkeypatch):
+    monkeypatch.setenv('TERMUX_VERSION', '0.118')
+    bin_ = tmp_path / 'bin'
+    bin_.mkdir()
+    monkeypatch.setenv('PATH', f'{bin_}:/usr/bin:/bin')
+    calls, pending = tmp_path / 'calls', tmp_path / 'pending'
+    (bin_ / 'termux-job-scheduler').write_text(
+        f'#!/bin/sh\necho "$@" >> {calls}\n[ "$1" = --pending ] && cat {pending}\nexit 0\n')
+    (bin_ / 'termux-job-scheduler').chmod(0o755)
+    job = home / '.termux' / 'm-sync-job'
+    notes = []
+    init = _termux_init(notes)
+
+    pending.write_text('No jobs found\n')
+    init.schedule_m_sync(job)
+    assert (f'--job-id 7301 --script {job} --period-ms 900000 --network any --persisted true'
+            in calls.read_text())
+
+    pending.write_text(f'Pending Job 7301: {job}    (periodic: 900000ms) (persisted) (battery not low)\n')
+    calls.write_text('')
+    notes.clear()
+    init.schedule_m_sync(job)
+    assert calls.read_text() == '--pending\n' and notes[-1][0] == mobilize.OK, 'already there: left alone'
+
+    monkeypatch.setattr(mobilize, 'settings', lambda: {'mobilize.msync.every': '30'})
+    init.schedule_m_sync(job)
+    assert '--period-ms 1800000' in calls.read_text(), 'a new period replaces it'
+
+    monkeypatch.setattr(mobilize, 'settings', lambda: {'mobilize.msync.every': 'off'})
+    init.schedule_m_sync(job)
+    assert '--cancel --job-id 7301' in calls.read_text()
+
+
+def test_m_sync_every():
+    assert mobilize.m_sync_every({}) == 15
+    assert mobilize.m_sync_every({'mobilize.msync.every': '5'}) == 15, "Android's floor"
+    assert mobilize.m_sync_every({'mobilize.msync.every': '60m'}) == 60
+    assert mobilize.m_sync_every({'mobilize.msync.every': 'off'}) == 0
+    assert mobilize.m_sync_every({'mobilize.msync.every': 'often'}) == 15
+
+
+def test_an_untouched_older_m_sync_is_replaced(home, tmp_path, monkeypatch):
+    monkeypatch.setenv('TERMUX_VERSION', '0.118')
+    bin_ = tmp_path / 'bin'
+    bin_.mkdir()
+    (bin_ / 'nb').write_text('#!/bin/sh\nexit 0\n')
+    (bin_ / 'nb').chmod(0o755)
+    monkeypatch.setenv('PATH', f'{bin_}:/usr/bin:/bin')
+    old = '#!/bin/sh\n# an m-sync an older mobilize wrote\n'
+    monkeypatch.setitem(mobilize.OLD_SCRIPTS, 'm-sync', {mobilize.hashlib.sha256(old.encode()).hexdigest()})
+    script = home / '.shortcuts' / 'tasks' / 'm-sync'
+    script.parent.mkdir(parents=True)
+    script.write_text(old)
+    assert _termux_init([]).step_m_sync()
+    assert script.read_text() == mobilize.M_SYNC_TEXT
+    job = home / '.termux' / 'm-sync-job'
+    assert job.read_text() == mobilize.M_SYNC_JOB_TEXT and os.access(job, os.X_OK)
 
 
 def test_m_sync_is_valid_bash():
@@ -754,6 +813,10 @@ def test_m_sync_between_two_stations(tmp_path):
     for sync in (sync_a, sync_b, sync_a):
         r = sync()
         assert r.returncode == 0 and '✓' in r.stdout, r.stdout + r.stderr
+    r = subprocess.run(['bash', str(script), '--quiet'], env=dict(os.environ, HOME=str(tmp_path / 'hB'),
+                       NB_DIR=str(b), M_SYNC_BIN=str(bin_), M_SYNC_LOG=str(tmp_path / 'qlog'),
+                       TMPDIR=str(tmp_path / 'tmp')), capture_output=True, text=True)
+    assert r.returncode == 0 and 'mob ✓' in r.stdout, "a scheduled (--quiet) run"
     assert {p.name for p in (a / 'mob').glob('*.md')} == {'from_a.md', 'plain.md'}
     assert not (a / 'home' / '.m-sync.json').exists(), 'home has no remote: not synced'
 
