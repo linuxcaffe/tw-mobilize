@@ -1000,11 +1000,38 @@ def test_android_steps_for_a_samsung_on_android_14():
     assert 'is installed' in unknown[3][2][0], 'pm could not list: say nothing false'
 
 
+def test_android_documents_step_only_with_nb_and_says_what_it_knows():
+    assert 'documents' not in [k for k, *_ in mobilize.android_steps(HUAWEI, {'com.termux'}, False)]
+    key, title, lines, screens, done = mobilize.android_steps(HUAWEI, {'com.termux'}, False, ['mobile'])[-1]
+    assert key == 'documents' and done is False and screens == []
+    assert any('Install Fossify Documents' in l for l in lines) and any('.nb/mobile' in l for l in lines)
+    *_, lines, _, done = mobilize.documents_step({'org.fossify.documents.debug'}, [])
+    assert done is None, 'the folder grant is the app\'s own: mobilize cannot see it'
+    assert 'The fork is installed' in lines[0] and any(l.endswith('.nb → "Use this folder" → Allow. Termux shows up there by itself.') for l in lines)
+    *_, lines, _, done = mobilize.documents_step({'org.fossify.documents'}, ['mobile'])
+    assert 'Fossify Documents is installed' in lines[0] and not any('status above' in l for l in lines)
+    *_, lines, _, done = mobilize.documents_step(None, ['mobile'])
+    assert done is None and not any('installed' in l for l in lines), 'pm could not list: say nothing false'
+
+
+def test_shared_notebooks_are_the_ones_with_a_remote(tmp_path):
+    for name, remote in (('home', False), ('mobile', True), ('old', True)):
+        d = tmp_path / name
+        subprocess.run(['git', 'init', '-q', str(d)], check=True)
+        if remote:
+            subprocess.run(['git', '-C', str(d), 'remote', 'add', 'origin', 'git@x:y.git'], check=True)
+    (tmp_path / 'old' / '.archived').write_text('')
+    (tmp_path / 'plain').mkdir()
+    assert mobilize.shared_notebooks(tmp_path) == ['mobile']
+    assert mobilize.shared_notebooks(tmp_path / 'missing') == []
+
+
 def _android_env(monkeypatch, am_output):
     monkeypatch.setenv('TERMUX_VERSION', '0.118')
     monkeypatch.setattr(mobilize, 'android_info', lambda: HUAWEI)
     monkeypatch.setattr(mobilize, 'android_packages', lambda: {'com.termux', 'com.termux.widget'})
     monkeypatch.setattr(mobilize, 'web_up', lambda port=5000: False)
+    monkeypatch.setattr(mobilize, 'station_notebooks', lambda: None)
     monkeypatch.setattr(mobilize.sys.stdin, 'isatty', lambda: True)
     calls = []
     def fake_run(argv, env=None, **kw):

@@ -63,7 +63,7 @@ import sys
 import urllib.request
 from pathlib import Path
 
-__version__ = '0.9.0'
+__version__ = '0.9.1'
 
 OK, DONE, WOULD, SKIP, WARN, FAIL, YOU = 'ok', 'done', 'would', 'skip', 'warn', 'fail', 'you'
 
@@ -2545,9 +2545,29 @@ HUAWEI_APP_LAUNCH = ['-n', 'com.huawei.systemmanager/.startupmgr.ui.StartupNorma
 OVERLAY = ['-a', 'android.settings.action.MANAGE_OVERLAY_PERMISSION', '-d', 'package:com.termux']
 
 
-def android_steps(info, packages, up):
+DOCUMENTS_APPS = ('org.fossify.documents.debug', 'org.fossify.documents')   # the fork's build first
+
+
+def shared_notebooks(nb_dir=None):
+    """The nb notebooks m-sync syncs: the ones with a git remote (like m-sync's own `shared`)."""
+    root = Path(nb_dir or os.environ.get('NB_DIR') or Path.home() / '.nb')
+    names = []
+    for d in sorted(root.iterdir()) if root.is_dir() else ():
+        if (d / '.git').is_dir() and not (d / '.archived').exists() and \
+                run(['git', '-C', str(d), 'remote', 'get-url', 'origin']).returncode == 0:
+            names.append(d.name)
+    return names
+
+
+def station_notebooks():
+    """shared_notebooks() on a station with nb, else None."""
+    return shared_notebooks() if shutil.which('nb') else None
+
+
+def android_steps(info, packages, up, notebooks=None):
     """The walk: (key, title, lines, screens to try in order, done?) for this phone. done is
-    True/False when mobilize can tell, None when it can't (most of Android's settings)."""
+    True/False when mobilize can tell, None when it can't (most of Android's settings).
+    notebooks: the shared nb notebooks, or None without nb (no Documents step then)."""
     maker = (info.get('maker') or '').lower()
     huawei = maker in ('huawei', 'honor') or bool(info.get('emui'))
     have = (lambda name: None) if packages is None else (lambda name: name in packages)
@@ -2592,7 +2612,27 @@ def android_steps(info, packages, up):
     steps.append(('try', 'Tap the tw-web button', [
         'It starts tw-web and opens the browser; Termux then says "wake lock held".',
         'Each start, death and restart is logged in ~/.cache/tw-web/server.out.'], [], up))
+    if notebooks is not None:
+        steps.append(documents_step(packages, notebooks))
     return steps
+
+
+def documents_step(packages, notebooks):
+    """Browsing the notebooks in Fossify Documents (or the fork, which also shows m-sync's status
+    strip). Whether the app was given the folder, mobilize can't see: Android keeps that to the app."""
+    found = None if packages is None else next((p for p in DOCUMENTS_APPS if p in packages), '')
+    folder = f'.nb/{notebooks[0]}' if notebooks else '.nb'
+    lines = []
+    if found == '':
+        lines += ['Install Fossify Documents (F-Droid), or the fork that also shows m-sync\'s status',
+                  '(github.com/linuxcaffe/Documents: its phone build, org.fossify.documents.debug).']
+    elif found:
+        lines.append(f'{"The fork" if found.endswith(".debug") else "Fossify Documents"} is installed ({found}).')
+    lines += ['In Documents: + → Open folder; in the picker, ☰ → Termux, then open',
+              f'{folder} → "Use this folder" → Allow. Termux shows up there by itself.']
+    if found != 'org.fossify.documents':
+        lines.append("The fork shows m-sync's status above the notes: synced, waiting, or a conflict copy.")
+    return ('documents', 'Browse your notes in Documents', lines, [], False if found == '' else None)
 
 
 def open_screen(screens):
@@ -2614,7 +2654,7 @@ def android(list_only=False, out=print, ask=input):
         out('mobilize android: for a phone, in Termux. Nothing to do here.')
         return 0
     info = android_info()
-    steps = android_steps(info, android_packages(), web_up())
+    steps = android_steps(info, android_packages(), web_up(), station_notebooks())
     out(f"mobilize android: {info['maker'] or 'Android'} {info['model']}, Android {info['release'] or '?'}"
         + (f" ({info['emui']})" if info['emui'] else ''))
     out("Android's own settings, which Termux can't change or read: you set them, mobilize opens")

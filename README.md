@@ -33,11 +33,11 @@ that's Termux, not mobilize. Run `termux-change-repo` (pick a mirror group near 
 `pkg upgrade`, then the three lines again. Termux is a rolling release: a long-unused install needs
 upgrading before it installs anything.
 
-**Status: 0.9.0, in daily use on one phone** (`s5`, since 2026-10-22). Commands: `init`, `check`
+**Status: 0.9.1, in daily use on one phone** (`s5`, since 2026-10-22). Commands: `init`, `check`
 (`--hooks`: the hook pre-test), `hooks` (each station's chosen hooks), `android` (the phone's own
 settings, step by step), `stations`, `-e`; tested with pytest in a fake home folder. The Termux launcher
 restarts tw-web when it dies, and opening Termux starts it. With nb installed, `init` also adds
-home-screen buttons for quick nb notes (0.7.0), and with hledger-web installed, a button for it (0.7.2); and t-quick clocks in and out of the timelog (0.8.0). The task2 deb comes from [taskwarrior-2.6](https://github.com/linuxcaffe/taskwarrior-2.6) (0.8.1), tw-web from `tw -I tw-web` (0.8.2; `mobilize.web.repo` is no longer read), and Taskwarrior from taskwarrior-2.6's installer, which also builds it on Linux (0.8.3; `mobilize.task.deb` and `.sha256` are no longer read). m-sync syncs the nb notebooks that have a git remote, with conflict copies instead of conflict markers, and quick notes go to the notebook `mobile` when there is one (0.9.0). This README also keeps what was learned
+home-screen buttons for quick nb notes (0.7.0), and with hledger-web installed, a button for it (0.7.2); and t-quick clocks in and out of the timelog (0.8.0). The task2 deb comes from [taskwarrior-2.6](https://github.com/linuxcaffe/taskwarrior-2.6) (0.8.1), tw-web from `tw -I tw-web` (0.8.2; `mobilize.web.repo` is no longer read), and Taskwarrior from taskwarrior-2.6's installer, which also builds it on Linux (0.8.3; `mobilize.task.deb` and `.sha256` are no longer read). m-sync syncs the nb notebooks that have a git remote, with conflict copies instead of conflict markers, and quick notes go to the notebook `mobile` when there is one (0.9.0); `mobilize android` adds a step for browsing the notes in Documents, and the README describes m-sync's status file (0.9.1). This README also keeps what was learned
 setting up the first phone (2026-10-21/22): "Problems found" is the record.
 
 ## TL;DR
@@ -77,7 +77,26 @@ setting up the first phone (2026-10-21/22): "Problems found" is the record.
 | nb quick notes | `~/.shortcuts/nb-note`, `~/.shortcuts/tasks/nb-quick`, `~/bin/termux-url-opener` (Termux, once `nb` is installed) | home-screen buttons for [nb](https://github.com/xwmx/nb) (`npm install -g nb.sh`): `nb-note` asks in a terminal, `nb-quick` in Android popups (`pkg install termux-api`), and Share → Termux saves what was shared. The title becomes the filename, so a file browser shows real names. Notes go to the notebook `mobile` when there is one (the one m-sync shares), else to nb's current notebook. nb's logo is their widget icon (`~/.shortcuts/icons/`) |
 | hledger-web button | `~/.shortcuts/hledger-web` (Termux, once hledger-web is installed) | mobilize doesn't install hledger-web: Termux's `hledger` is CLI only, and Debian trixie dropped hledger-web, so today it comes from a proot-distro Debian switched to sid (`apt install hledger-web`); a native one on Termux's PATH is used first. Serves `localhost:5050` (tw-web has 5000) on `$LEDGER_FILE` or `~/.hledger.journal`, with Termux's home bound into Debian at the same path; `--start`, `--stop`. hledger's logo is its widget icon |
 | t-quick | `~/.shortcuts/tasks/t-quick` (Termux, once `~/.task/scripts/t` is there) | the timelog ([t](https://github.com/linuxcaffe/t)) in Android popups, no terminal: one list to clock in to a recent account (or a new one), or, while in, to clock out (with a note), comment or switch. While you're in, an ongoing notification shows the account and start time, with Out and Menu buttons; a toast says what t did. The icon is a green or red t (`icons/t-quick.png`, swapped from `.t-quick-in.png`/`.t-quick-out.png`), but Termux:Widget only redraws it with the widget, so the notification is the live status. `t-quick --refresh` syncs both after a `t in`/`t out` in a shell. Needs `termux-api` |
-| m-sync | `~/.shortcuts/tasks/m-sync` (Termux, once `nb` is installed) | syncs every nb notebook that has a git remote (one branch per notebook, `origin/<name>`, as nb-web keeps them; `home` has none and stays on the phone). nb commits what's new first, files another app saved included; then fetch, merge, push, never a force-push. A note changed on both sides keeps the remote's version under its name, and this phone's goes beside it as `note.conflict-<station>.md`: no conflict markers in notes, ever. A notebook that doesn't track `origin/<its name>`, or whose history has nothing in common with the remote's, is left alone. A toast says what happened; the icon is green (synced), amber (offline, changes wait) or red (a conflict copy to look at, or a problem, also a notification). Each notebook gets `.m-sync.json` (kept out of git) for other apps to read; log in `$PREFIX/var/log/m-sync.log`. `init` turns nb's own `auto_sync` off, since nb's sync commits conflict markers. Meant for other small syncs too (journals next) |
+| m-sync | `~/.shortcuts/tasks/m-sync` (Termux, once `nb` is installed) | syncs every nb notebook that has a git remote (one branch per notebook, `origin/<name>`, as nb-web keeps them; `home` has none and stays on the phone). nb commits what's new first, files another app saved included; then fetch, merge, push, never a force-push. A note changed on both sides keeps the remote's version under its name, and this phone's goes beside it as `note.conflict-<station>.md`: no conflict markers in notes, ever. A notebook that doesn't track `origin/<its name>`, or whose history has nothing in common with the remote's, is left alone. A toast says what happened; the icon is green (synced), amber (offline, changes wait) or red (a conflict copy to look at, or a problem, also a notification). Each notebook gets `.m-sync.json` (kept out of git) for other apps to read; log in `$PREFIX/var/log/m-sync.log`. `init` turns nb's own `auto_sync` off, since nb's sync commits conflict markers; that setting is one for all notebooks, but nb only acts on it for a notebook with a remote, so the phone's local ones (`home`) lose nothing. Meant for other small syncs too (journals next) |
+
+### m-sync's status file
+
+After each run, m-sync writes `.m-sync.json` into each notebook it synced, kept out of git
+(`.git/info/exclude`), for other apps to show. The Documents fork reads it. Fields:
+
+| Field | Value |
+|---|---|
+| `tool` | `"m-sync"` |
+| `station` | this station's name (`gittw.device` in `~/.task/local.rc`) |
+| `state` | `ok`, `offline` (couldn't reach the remote), `conflict` (a conflict copy is in the notebook) or `error` (left alone: see `message`) |
+| `message` | empty when `ok`; otherwise what happened, as in the toast |
+| `checked` | when this run looked, `2026-10-30T10:56:15-0400` (`%Y-%m-%dT%H:%M:%S%z`) |
+| `synced` | when it last reached the remote, same format; `null` before the first time |
+| `waiting` | commits not on the remote yet (offline) |
+| `conflicts` | the notebook's `*.conflict-<station>.*` files, paths relative to the notebook |
+
+`conflict` stays until the copies are gone: merge what you want into the note, delete the copy,
+sync again.
 
 ## Keeping tw-web running on Android
 
@@ -149,6 +168,11 @@ What mobilize can't do from inside Termux. Worked out on `s5` (Huawei P20, EMUI,
 5. **Tap the widget.** It starts tw-web and opens the browser; Termux's notification then says
    "wake lock held". `~/.cache/tw-web/server.out` logs each start, death and restart
    (`mobilize:` lines).
+6. **Browse your notes in Documents** (once nb is installed): Fossify Documents (F-Droid), or
+   [the fork](https://github.com/linuxcaffe/Documents), whose phone build (`org.fossify.documents.debug`)
+   also shows m-sync's status above a synced notebook. In the app: + → Open folder; in the picker,
+   ☰ → Termux, then `.nb/mobile` (your first shared notebook) → "Use this folder" → Allow.
+   `mobilize android` says which one is installed; whether the app has the folder, only the app knows.
 
 ## sshd on a phone: a development aid
 
@@ -362,6 +386,7 @@ remote is an argument, so the repo can be public.
 | hledger-web button | yes, once hledger-web is installed: the launcher and hledger's logo as its icon; one that's there and different is left as it is. Installing hledger-web is **you** |
 | t-quick | yes, once `t` is in `~/.task/scripts`: the script and its three icons; an edited script is left as it is. `termux-api` is **you** |
 | m-sync | yes, once `nb` is installed: the script, its three icons, and nb's `auto_sync` off; an edited script is left as it is. Giving a notebook its remote (`nb notebooks add <name> <url> <name>`) is **you** |
+| Documents | no: `mobilize android` (step 6) says whether Fossify Documents or the fork is installed, and how to give it `.nb/<notebook>`. Installing it and allowing the folder are **you** |
 | Install tw-web as a browser app | **you**: it opens `http://localhost:5000` with `termux-open-url` |
 | Commit the shared files it changed (`mobilize.rc`, its include), together; never push | yes |
 | Final `check` | yes |
