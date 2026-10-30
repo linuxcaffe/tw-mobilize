@@ -650,6 +650,143 @@ def test_t_quick_is_valid_bash():
     assert r.returncode == 0, r.stderr
 
 
+def test_nb_quick_notes_go_to_mobile_and_old_scripts_are_replaced(home, tmp_path, monkeypatch):
+    for path, text in mobilize.nb_scripts().items():
+        if path.name != 'termux-url-opener':
+            assert '${to}add' in text and 'NB_AUTO_SYNC=0' in text, path.name
+    monkeypatch.setenv('TERMUX_VERSION', '0.118')
+    bin_ = tmp_path / 'bin'
+    bin_.mkdir()
+    for tool in ('nb', 'termux-dialog', 'termux-toast'):
+        (bin_ / tool).write_text('#!/bin/sh\n')
+        (bin_ / tool).chmod(0o755)
+    monkeypatch.setenv('PATH', str(bin_))
+    old = '#!/bin/sh\n# an nb-quick an older mobilize wrote\n'
+    monkeypatch.setitem(mobilize.NB_OLD_SCRIPTS, 'nb-quick',
+                        {mobilize.hashlib.sha256(old.encode()).hexdigest()})
+    quick = home / '.shortcuts' / 'tasks' / 'nb-quick'
+    note = home / '.shortcuts' / 'nb-note'
+    quick.parent.mkdir(parents=True)
+    quick.write_text(old)
+    note.write_text('#!/bin/sh\necho mine\n')
+    notes = []
+    assert _termux_init(notes).step_nb()
+    assert quick.read_text() == mobilize.nb_scripts()[quick], 'an untouched old one is replaced'
+    assert note.read_text() == '#!/bin/sh\necho mine\n', 'an edited one is left alone'
+
+
+def test_init_on_termux_gives_nb_m_sync_and_turns_nb_auto_sync_off(home, tmp_path, monkeypatch):
+    monkeypatch.setenv('TERMUX_VERSION', '0.118')
+    bin_ = tmp_path / 'bin'
+    bin_.mkdir()
+    monkeypatch.setenv('PATH', f'{bin_}:/usr/bin:/bin')
+    notes = []
+    init = _termux_init(notes)
+    script = home / '.shortcuts' / 'tasks' / 'm-sync'
+    icons = home / '.shortcuts' / 'icons'
+    assert init.step_m_sync() and not script.exists(), 'no nb: nothing written'
+    assert notes[-1][0] == mobilize.SKIP
+
+    calls = tmp_path / 'nb-calls'
+    (bin_ / 'nb').write_text(f'#!/bin/sh\necho "$@" >> {calls}\n[ "$1" = settings ] && echo 1\nexit 0\n')
+    (bin_ / 'nb').chmod(0o755)
+    notes.clear()
+    assert init.step_m_sync()
+    assert script.read_text() == mobilize.M_SYNC_TEXT and os.access(script, os.X_OK)
+    for name in ('.m-sync-ok.png', '.m-sync-offline.png', '.m-sync-error.png', 'm-sync.png'):
+        assert (icons / name).read_bytes().startswith(b'\x89PNG\r\n\x1a\n'), name
+    assert (icons / 'm-sync.png').read_bytes() == (icons / '.m-sync-offline.png').read_bytes(), 'amber until it syncs'
+    assert 'set auto_sync 0' in calls.read_text()
+    assert notes[-1][0] == mobilize.YOU and 'termux-api' in notes[-1][1]
+
+    script.write_text('#!/bin/sh\necho mine\n')
+    notes.clear()
+    assert init.step_m_sync()
+    assert script.read_text() == '#!/bin/sh\necho mine\n', 'one edited by hand is left alone'
+    assert notes[0][0] == mobilize.WARN
+
+
+def test_m_sync_is_valid_bash():
+    r = subprocess.run(['bash', '-n'], input=mobilize.M_SYNC_TEXT, capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+
+
+@pytest.mark.skipif(not shutil.which('nb'), reason='needs nb')
+def test_m_sync_between_two_stations(tmp_path):
+    """Two stations, one bare remote: notes travel both ways, a note changed on both sides ends
+    as the remote's version plus a conflict copy (never markers), and a notebook whose history
+    is unrelated to the remote's is refused without touching the remote."""
+    bin_ = tmp_path / 'bin'
+    bin_.mkdir()
+    for tool in ('bash', 'python3'):
+        (bin_ / tool).symlink_to(shutil.which(tool))
+    (bin_ / 'nb').symlink_to(os.path.realpath(shutil.which('nb')))
+    script = tmp_path / 'm-sync'
+    script.write_text(mobilize.M_SYNC_TEXT)
+    remote = tmp_path / 'remote.git'
+    subprocess.run(['git', 'init', '-q', '--bare', str(remote)], check=True)
+    (tmp_path / 'tmp').mkdir()
+
+    def station(name):
+        h = tmp_path / f'h{name}'
+        (h / '.task').mkdir(parents=True)
+        (h / '.task' / 'local.rc').write_text(f'gittw.device={name}\n')
+        (h / '.gitconfig').write_text('[user]\n\tname = t\n\temail = t@t\n')
+        env = dict(os.environ, HOME=str(h), NB_DIR=str(h / 'nb'), M_SYNC_BIN=str(bin_),
+                   M_SYNC_LOG=str(h / 'log'), TMPDIR=str(tmp_path / 'tmp'), NB_AUTO_SYNC='0')
+        nb = lambda *a: subprocess.run(['nb', *a], env=env, stdin=subprocess.DEVNULL,
+                                        capture_output=True, text=True)
+        sync = lambda: subprocess.run(['bash', str(script)], env=env, capture_output=True, text=True)
+        nb('init')
+        return h / 'nb', nb, sync
+
+    a, nb_a, sync_a = station('A')
+    nb_a('notebooks', 'add', 'mob')
+    for args in (('branch', '-m', 'mob'), ('remote', 'add', 'origin', remote.as_uri()),
+                 ('push', '-q', '-u', 'origin', 'mob')):
+        subprocess.run(['git', '-C', str(a / 'mob'), *args], check=True, capture_output=True)
+    b, nb_b, sync_b = station('B')
+    nb_b('notebooks', 'add', 'mob', remote.as_uri(), 'mob')
+    assert (b / 'mob' / '.git').exists()
+
+    nb_a('mob:add', '--title', 'From A', '--content', 'a')
+    (b / 'mob' / 'plain.md').write_text('saved by another app\n')
+    for sync in (sync_a, sync_b, sync_a):
+        r = sync()
+        assert r.returncode == 0 and '✓' in r.stdout, r.stdout + r.stderr
+    assert {p.name for p in (a / 'mob').glob('*.md')} == {'from_a.md', 'plain.md'}
+    assert not (a / 'home' / '.m-sync.json').exists(), 'home has no remote: not synced'
+
+    (a / 'mob' / 'from_a.md').write_text('A edit\n')
+    (b / 'mob' / 'from_a.md').write_text('B edit\n')
+    sync_a()
+    r = sync_b()
+    assert r.returncode == 1 and 'from_a.conflict-B.md' in r.stdout
+    assert (b / 'mob' / 'from_a.md').read_text() == 'A edit\n'
+    assert (b / 'mob' / 'from_a.conflict-B.md').read_text() == 'B edit\n'
+    sync_a()
+    assert (a / 'mob' / 'from_a.conflict-B.md').exists(), 'the copy travels'
+    status = json.loads((a / 'mob' / '.m-sync.json').read_text())
+    assert status['state'] == 'conflict' and status['conflicts'] == ['from_a.conflict-B.md']
+    for d in (a, b):
+        assert '<<<<<<<' not in ''.join(p.read_text() for p in (d / 'mob').glob('*.md'))
+        st = subprocess.run(['git', '-C', str(d / 'mob'), 'status', '--porcelain'],
+                            capture_output=True, text=True).stdout
+        assert st == '', 'the status file stays out of git'
+
+    c, nb_c, sync_c = station('C')
+    nb_c('notebooks', 'add', 'mob')
+    for args in (('branch', '-m', 'mob'), ('remote', 'add', 'origin', remote.as_uri()),
+                 ('fetch', '-q', 'origin'), ('branch', '-q', '-u', 'origin/mob')):
+        subprocess.run(['git', '-C', str(c / 'mob'), *args], check=True, capture_output=True)
+    head = lambda: subprocess.run(['git', '-C', str(remote), 'rev-parse', 'mob'],
+                                  capture_output=True, text=True).stdout
+    before = head()
+    r = sync_c()
+    assert r.returncode == 1 and 'nothing in common' in r.stdout
+    assert head() == before, 'the remote is untouched'
+
+
 def test_ssh_urls():
     assert mobilize.is_ssh_url('git@codeberg.org:me/data.git')
     assert mobilize.is_ssh_url('ssh://git@host:22/x.git')

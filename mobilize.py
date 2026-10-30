@@ -11,7 +11,7 @@ Commands
                                   Taskwarrior 2.6.2, an SSH key, the clone of your
                                   gittw repo and where it pushes, ~/.taskrc, local.rc,
                                   missing state files, PATH, mobilize.rc, tw-web and
-                                  (Termux) a launcher, and nb's quick-note buttons. Each step looks first and does
+                                  (Termux) a launcher, nb's quick-note buttons and m-sync. Each step looks first and does
                                   only what's missing, so it's safe to run again.
                                   Nothing is deleted: what's in the way is moved
                                   aside (*.pre-mobilize-<time>). Ends with `check`.
@@ -48,6 +48,7 @@ Exit 0 ok, 1 warnings, 2 failures. Standard library only.
 """
 import argparse
 import base64
+import hashlib
 import datetime as dt
 import json
 import os
@@ -62,7 +63,7 @@ import sys
 import urllib.request
 from pathlib import Path
 
-__version__ = '0.8.3'
+__version__ = '0.9.0'
 
 OK, DONE, WOULD, SKIP, WARN, FAIL, YOU = 'ok', 'done', 'would', 'skip', 'warn', 'fail', 'you'
 
@@ -682,19 +683,22 @@ NB_NOTE_TEXT = r'''#!/data/data/com.termux/files/usr/bin/sh
 # nb-note: a quick nb note from the home screen (Termux:Widget opens it in a terminal).
 # Asks for a title, which becomes the filename ("Buy milk" -> buy_milk.md; empty -> a
 # timestamp name), then one line of text: type it and the note is saved at once, or
-# leave it empty to write the note in nano. nb commits it either way.
-# Written by `mobilize init`, which leaves it alone once it's edited.
+# leave it empty to write the note in nano. nb commits it either way. The note goes to the
+# notebook `mobile` when there is one (the one m-sync shares with the other stations), else
+# to nb's current notebook. Written by `mobilize init`, which leaves it alone once it's edited.
 #
 # Started from the widget, it gets a bare environment, where nb's `#!/usr/bin/env bash`
-# line can fail ("nb: not found"), so run it with bash directly.
+# line can fail ("nb: not found"), so run it with bash directly. m-sync does the syncing:
+# nb's own would commit conflict markers into notes.
 nb() { bash /data/data/com.termux/files/usr/bin/nb "$@"; }
-export EDITOR="${EDITOR:-nano}"
+export EDITOR="${EDITOR:-nano}" NB_AUTO_SYNC=0
+to=; [ -d "${NB_DIR:-$HOME/.nb}/mobile" ] && to=mobile:
 
 printf "Title: "; read -r title
 printf "Text (empty = open editor): "; read -r text
 set --
 [ -n "$title" ] && set -- --title "$title"
-if [ -n "$text" ]; then nb add "$@" --content "$text"; else nb add "$@"; fi
+if [ -n "$text" ]; then nb "${to}add" "$@" --content "$text"; else nb "${to}add" "$@"; fi
 printf "\nPress Enter to close. "; read -r _
 '''
 
@@ -702,15 +706,19 @@ NB_QUICK_TEXT = r'''#!/data/data/com.termux/files/usr/bin/bash
 # nb-quick: a new nb note through Android popups, no terminal (Termux:Widget runs
 # ~/.shortcuts/tasks/* in the background). Asks for a title, which becomes the filename
 # ("Buy milk" -> buy_milk.md; blank -> a timestamp name), then the note text. nb commits it,
-# and a toast says how it went. Cancel either popup and nothing is saved.
-# Written by `mobilize init`, which leaves it alone once it's edited.
+# and a toast says how it went. Cancel either popup and nothing is saved. The note goes to
+# the notebook `mobile` when there is one (the one m-sync shares with the other stations),
+# else to nb's current notebook. Written by `mobilize init`, which leaves it alone once it's edited.
 #
 #   nb-quick          ask for title and text
 #   nb-quick TEXT     ask for the title only, TEXT is the note (~/bin/termux-url-opener
 #                     passes what was shared to Termux)
 P=/data/data/com.termux/files/usr/bin
-# The widget gives a bare environment, where nb's `#!/usr/bin/env bash` can fail.
+# The widget gives a bare environment, where nb's `#!/usr/bin/env bash` can fail. m-sync does
+# the syncing: nb's own would commit conflict markers into notes.
 nb() { bash "$P/nb" "$@"; }
+export NB_AUTO_SYNC=0
+to=; [ -d "${NB_DIR:-$HOME/.nb}/mobile" ] && to=mobile:
 # termux-dialog prints JSON: {"code": -1 (OK) or -2 (cancel), "text": "..."}
 ask() {
     "$P/termux-dialog" text "$@" | "$P/python3" -c "import json, sys
@@ -730,7 +738,7 @@ if [ -z "$title$text" ]; then "$P/termux-toast" "nb: empty, nothing saved"; exit
 args=()
 [ -n "$title" ] && args+=(--title "$title")
 [ -n "$text" ] && args+=(--content "$text")
-if out=$(nb add --no-color "${args[@]}" </dev/null 2>&1); then
+if out=$(nb "${to}add" --no-color "${args[@]}" </dev/null 2>&1); then
     "$P/termux-toast" "nb: ${out#Added: }"
 else
     "$P/termux-toast" -b red "nb add failed: $(printf %s "$out" | tail -n 2)"
@@ -744,6 +752,18 @@ URL_OPENER_TEXT = r'''#!/data/data/com.termux/files/usr/bin/bash
 # Written by `mobilize init`, which leaves it alone once it's edited.
 exec "$HOME/.shortcuts/tasks/nb-quick" "$1"
 '''
+
+
+# sha256 of the nb scripts older mobilizes wrote (0.7.0-0.8.3): init replaces one of these,
+# since nobody edited it, and leaves any other text alone
+NB_OLD_SCRIPTS = {
+    'nb-note': {'042e6eb833ee00b0daed8df55b9d0aea2e6a27e735eb08085012e46b9afaa9ec'},
+    'nb-quick': {'19e5b53c4d5e684ff4eb118cab407edbb76fc182b200c1765b690e35bffd4222'},
+}
+
+
+def is_old_nb_script(path, text):
+    return hashlib.sha256(text.encode()).hexdigest() in NB_OLD_SCRIPTS.get(path.name, ())
 
 
 def nb_scripts():
@@ -1257,6 +1277,295 @@ T_ICON_OUT_PNG = (
 )
 
 
+# ── m-sync: the phone's small syncs (Termux) ─────────────────────────────────
+# Today the nb notebooks that have a git remote (one branch each on the remote, like nb-web's).
+# Not nb's own sync, which commits conflict markers into notes and pushes them: m-sync keeps the
+# remote's version under the note's name and this phone's as note.conflict-<station>.md. Other
+# fringe syncs (hledger journals next) belong here too, each as its own sync_<kind> function.
+
+M_SYNC_TEXT = r'''#!/data/data/com.termux/files/usr/bin/bash
+# m-sync: the phone's small syncs, from the home screen (Termux:Widget runs ~/.shortcuts/tasks/*
+# in the background). Today: nb notebooks. A notebook is shared when it has a git remote
+# (~/.nb/home has none and stays on the phone). For each shared notebook:
+#   1. nb commits what's new: nb-quick's notes, or files the Documents app saved
+#   2. fetch, merge, push, never a force-push. When the same note changed on both sides, the
+#      remote's version keeps the name and this phone's is saved beside it as
+#      note.conflict-<station>.md, so no conflict markers ever reach a note
+#   3. a status file, .m-sync.json, in the notebook folder (kept out of git) for other apps
+# A toast says how it went. The widget icon turns green (synced), amber (offline: changes wait)
+# or red (a conflict copy to look at, or a problem: a notification says which). A notebook whose
+# branch doesn't track origin/<its own name>, or whose history has nothing in common with the
+# remote's, is left alone (red). Log: $PREFIX/var/log/m-sync.log.
+# Written by `mobilize init`, which leaves it alone once it's edited.
+#
+#   m-sync            sync every shared notebook
+#   m-sync NAME...    just those
+#   m-sync --status   print each one's status file
+P=${M_SYNC_BIN:-/data/data/com.termux/files/usr/bin}   # tests run it on a desktop with their own
+export PATH="$P:$PATH" NB_AUTO_SYNC=0 GIT_TERMINAL_PROMPT=0
+NB_ROOT=${NB_DIR:-$HOME/.nb}
+SELF=$HOME/.shortcuts/tasks/m-sync
+ICONS=$HOME/.shortcuts/icons
+LOG=${M_SYNC_LOG:-$P/../var/log/m-sync.log}
+STATUS=.m-sync.json
+
+station=$(sed -n 's/^gittw\.device *= *//p' "$HOME/.task/local.rc" 2>/dev/null | tail -n 1)
+station=${station:-$(hostname 2>/dev/null)}
+station=${station:-phone}
+
+# nb's own `#!/usr/bin/env bash` can fail in the widget's bare environment; no stdin
+nb() { "$P/bash" "$P/nb" "$@" </dev/null; }
+g() { git -C "$dir" "$@"; }
+# Termux:API is optional: without it, m-sync only prints and logs
+toast() { [ -x "$P/termux-toast" ] && "$P/termux-toast" "$@"; }
+log() { local m="$*"; mkdir -p "${LOG%/*}" && printf '%s %s\n' "$(date '+%F %T')" "${m//$'\n'/ | }" >> "$LOG"; }
+copies_word() { [ "$1" -eq 1 ] && echo "1 conflict copy" || echo "$1 conflict copies"; }
+
+shared() {   # the notebooks with a remote, not archived
+    local d
+    for d in "$NB_ROOT"/*/; do
+        d=${d%/}
+        [ -d "$d/.git" ] && [ ! -e "$d/.archived" ] && git -C "$d" remote get-url origin >/dev/null 2>&1 &&
+            printf '%s\n' "${d##*/}"
+    done
+}
+
+conflict_name() {   # notes/plan.md -> notes/plan.conflict-s5.md (-2, -3 … when taken)
+    local f=$1 stem ext n=1 c
+    case ${f##*/} in ?*.*) stem=${f%.*}; ext=.${f##*.} ;; *) stem=$f; ext= ;; esac
+    c=$stem.conflict-$station$ext
+    while [ -e "$dir/$c" ]; do n=$((n + 1)); c=$stem.conflict-$station-$n$ext; done
+    printf '%s' "$c"
+}
+
+# resolve: the merge stopped on conflicts. Theirs keeps each name, ours goes to a conflict copy.
+resolve() {
+    local f copy files
+    mapfile -t files < <(g diff --name-only --diff-filter=U)
+    if [ ${#files[@]} -eq 0 ]; then
+        g merge --abort; state=error; msg="merge failed"; return 1
+    fi
+    for f in "${files[@]}"; do
+        if g cat-file -e ":3:$f" 2>/dev/null; then
+            if g cat-file -e ":2:$f" 2>/dev/null; then
+                copy=$(conflict_name "$f")
+                g show ":2:$f" > "$dir/$copy" && g add -- "$copy"
+                new+=("$copy")
+            fi
+            g show ":3:$f" > "$dir/$f" && g add -- "$f"
+        else   # deleted there, changed here: keep this phone's
+            g show ":2:$f" > "$dir/$f" && g add -- "$f"
+        fi
+    done
+    g commit -q --no-edit -m "[m-sync] Merge origin/$name: $(copies_word ${#new[@]}) from $station"
+}
+
+# sync_notebook NAME: sets state (ok, offline, conflict, error), msg, got, sent, waiting, copies
+sync_notebook() {
+    name=$1 dir=$NB_ROOT/$1
+    state=ok msg= got=0 sent=0 waiting=0 new=() copies=()
+    local branch up out L R marked
+    branch=$(g symbolic-ref --short -q HEAD) || { state=error msg="not on a branch"; return; }
+    up=$(g rev-parse --abbrev-ref -q "$branch@{upstream}" 2>/dev/null)
+    if [ "$up" != "origin/$name" ]; then
+        state=error msg="tracks ${up:-nothing}, not origin/$name: left alone"; return
+    fi
+    mkdir -p "$dir/.git/info"
+    grep -qx "/$STATUS" "$dir/.git/info/exclude" 2>/dev/null || echo "/$STATUS" >> "$dir/.git/info/exclude"
+    # nb's .index is one filename per line: two stations adding notes both keep theirs
+    grep -qx '/.index merge=union' "$dir/.git/info/attributes" 2>/dev/null ||
+        echo '/.index merge=union' >> "$dir/.git/info/attributes"
+
+    nb "$name:index" reconcile --commit >/dev/null 2>&1
+    if [ -n "$(g status --porcelain)" ]; then   # what nb didn't take (it skips some files)
+        g add -A && g commit -q -m "[m-sync] Commit on $station"
+    fi
+
+    if ! out=$(timeout 60 git -C "$dir" fetch -q origin "$name" 2>&1); then
+        waiting=$(g rev-list --count "origin/$name..HEAD" 2>/dev/null || echo 0)
+        log "$name fetch: $out"
+        if printf '%s' "$out" | grep -q "couldn't find remote ref"; then
+            state=error msg="no branch $name on origin"
+        else
+            state=offline msg="offline"
+        fi
+        return
+    fi
+
+    L=$(g rev-parse HEAD) R=$(g rev-parse "origin/$name")
+    if [ "$L" != "$R" ]; then
+        if ! g merge-base "$L" "$R" >/dev/null; then
+            state=error msg="history has nothing in common with origin/$name: left alone"; return
+        fi
+        got=$(g rev-list --count "HEAD..origin/$name")
+        if [ "$got" -gt 0 ] && ! g merge -q --no-edit "origin/$name" >/dev/null 2>&1; then
+            resolve || return
+            nb "$name:index" reconcile --commit >/dev/null 2>&1   # index the conflict copies
+        fi
+    fi
+
+    # never push conflict markers, whoever wrote them
+    marked=$(g diff --name-only --diff-filter=AM "origin/$name" HEAD |
+             while IFS= read -r f; do grep -lE '^(<<<<<<<|>>>>>>>) ' "$dir/$f" 2>/dev/null; done)
+    if [ -n "$marked" ]; then
+        state=error msg="conflict markers in ${marked//$dir\//}: not pushed"; return
+    fi
+
+    sent=$(g rev-list --count "origin/$name..HEAD")
+    if [ "$sent" -gt 0 ] && ! out=$(timeout 60 git -C "$dir" push -q origin "HEAD:$name" 2>&1); then
+        log "$name push: $out"
+        if [ -z "$again" ]; then again=1; sync_notebook "$name"; return; fi   # pushed meanwhile
+        state=error msg="push failed: $(printf '%s' "$out" | tail -n 1)"; return
+    fi
+
+    mapfile -t copies < <(cd "$dir" && find . -path ./.git -prune -o -type f -name '*.conflict-*' -print | sed 's|^\./||')
+    if [ ${#copies[@]} -gt 0 ]; then
+        state=conflict msg="$(copies_word ${#copies[@]}) to look at: ${copies[*]}"
+    fi
+}
+
+write_status() {   # .m-sync.json: what other apps (the Documents fork) can show
+    "$P/python3" - "$dir/$STATUS" "$state" "$msg" "$station" "$waiting" "${copies[@]}" <<'EOF'
+import json, sys, time
+path, state, msg, station, waiting, *copies = sys.argv[1:]
+now = time.strftime('%Y-%m-%dT%H:%M:%S%z')
+try:
+    old = json.load(open(path))
+except (OSError, ValueError):
+    old = {}
+json.dump({'tool': 'm-sync', 'station': station, 'checked': now,
+           'synced': now if state in ('ok', 'conflict') else old.get('synced'),
+           'state': state, 'message': msg, 'waiting': int(waiting), 'conflicts': copies},
+          open(path, 'w'), indent=1)
+EOF
+}
+
+if [ "$1" = --status ]; then
+    for name in $(shared); do printf '%s: ' "$name"; cat "$NB_ROOT/$name/$STATUS" 2>/dev/null || echo '(never synced)'; done
+    exit 0
+fi
+
+LOCK=${TMPDIR:-$P/../tmp}/m-sync.lock
+find "$LOCK" -maxdepth 0 -mmin +10 -exec rmdir {} \; 2>/dev/null   # left by a run Android killed
+mkdir "$LOCK" 2>/dev/null || { toast "m-sync: already running"; exit 0; }
+trap 'rmdir "$LOCK"' EXIT
+
+if [ $# -gt 0 ]; then names=("$@"); else mapfile -t names < <(shared); fi
+if [ ${#names[@]} -eq 0 ]; then
+    echo "m-sync: no shared notebooks (one with a git remote) in $NB_ROOT"
+    toast "m-sync: no shared notebooks"; exit 0
+fi
+
+worst=ok lines=()
+for name in "${names[@]}"; do
+    if [ ! -d "$NB_ROOT/$name/.git" ]; then lines+=("$name: no such notebook"); worst=error; continue; fi
+    again=
+    sync_notebook "$name"
+    write_status
+    case $state in
+        ok) line="$name ✓"; [ "$got" -gt 0 ] && line+=" ↓$got"; [ "$sent" -gt 0 ] && line+=" ↑$sent" ;;
+        offline) line="$name: offline"; [ "$waiting" -gt 0 ] && line+=", $waiting change(s) wait" ;;
+        *) line="$name: $msg" ;;
+    esac
+    lines+=("$line")
+    log "$name $state got=$got sent=$sent waiting=$waiting $msg"
+    case $state in
+        error|conflict) worst=error ;;
+        offline) [ "$worst" = ok ] && worst=offline ;;
+    esac
+done
+tail -n 500 "$LOG" > "$LOG.new" 2>/dev/null && mv -f "$LOG.new" "$LOG"
+
+summary=$(printf '%s\n' "${lines[@]}")
+printf '%s\n' "$summary"
+icon=$ICONS/.m-sync-$worst.png
+[ -f "$icon" ] && cp -f "$icon" "$ICONS/m-sync.png"
+if [ "$worst" = error ]; then
+    toast -b red "m-sync: $summary"
+    [ -x "$P/termux-notification" ] && "$P/termux-notification" -i m-sync --icon sync_problem \
+        -t "m-sync: needs a look" -c "$summary" \
+        --button1 "Sync again" --button1-action "$P/bash $SELF"
+else
+    toast "m-sync: $summary"
+    [ -x "$P/termux-notification-remove" ] && "$P/termux-notification-remove" m-sync
+fi
+[ "$worst" = error ] && exit 1
+exit 0
+'''
+
+# m-sync's icons: white arrows on green (synced), amber (offline, changes wait) or red (a
+# conflict copy or a problem). m-sync copies one over icons/m-sync.png after each run.
+M_SYNC_ICONS = {
+    'ok': (
+    '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'
+    ),
+    'offline': (
+    'iVBORw0KGgoAAAANSUhEUgAAAMAAAADACAMAAABlApw1AAAAP1BMVEX+/v0AAADYlxfu05/hs1nvpgnWlhjYlxfnwnr3fwf//wD/'
+    'AAB/fwC0fwC0tADWlRcAAAAAAAAAAAAAAAAAAABEeXb2AAAAFXRSTlP/APv//w9ao/8CAQECBQP+//////8iPTC+AAAGGElEQVR4'
+    '2u2da5ejIAyGQ7hpL+P//7eL2plq6wVJUsme8mHOnt3u+D4mhAApgFlu/t7/8CFG7E5sGGPwPkm5+xWhsPSXV39J6kOv/VT5A0JP'
+    'EZL8i7/mAvSwIXZ4uvg/COxieAjbB2hbcw/YVaP+1xAY7r22XYBEGRArkz+aAcOCEV4Abq3xsUL1v13am/a2BfBjTOyq1d87UhxE'
+    'rgH4ml//0wh+DSD9U1e5/t4IcwKY6g+dihamBDDVjzoAcEoA+vTPCUCh/hkBPPuvqvbXk0eA9qpMfyK4thMAf42oSz/Gq38C6OoA'
+    '827QA1wu6hxocKLL5QHgDaI+/YiDCUCnAz2dCMzl5lXqTwT+dkkAWg3wMAGYVmUPePSC1oCaHHQlL4UfE1GrfozmB4zvFLe+DwTU'
+    'qz91Y1DsQYMPQYuaXQhbUN0FUieAoBsgQNTtQhGibgtEQN0ACJ3y9gX4AnwBvgD/LcBzpiq5aSgC0G9OO2ethaGlPzgntWkO/OLR'
+    '/Sqft4QhsP0M3OqbRfFPCsfMwAqADjKaxUoBnIXMxmkG+Lz8obEhwCnyR4RqABCPy2dD4AAokz90ZzwfIC/yyBmBDNAAqdmTAdAC'
+    'tRHdCM5znz83wtMAWPQDNCcBIJN+WkeACvSTCKAG/RQCqEI/gQCk9PeTMPxNNdx+rlSaZINE/BmmXvg+UTsYTZ0cAG4rwbX52iaD'
+    'e7VxllHKAGzxXGVr6MaXBFcMABtCcraRe9uXz4i5kCOGktX/3+DsA2IA1KRm3Qg4C3AoA7D29EORfM0JZ3BCYRS3zU8bR5rm6BsB'
+    'pgh0NCfOGMmtjAs5ppx+n6CRAWCbk+wSOBEXcnT/zyVAEQDOPGyHQARg8ZFCSwIS2ejiEylrO/T8+iAA92q5+zCA43SgHSdyIn3g'
+    '/YEUB9pcFXadSBR6m5SILWqjDMA4xbUcBtgZBj40qZdblZFeVhm7Q9kYnLMlYlEW4NEdUEh+/qs5oVYCs7YUXFctQN6aHtYLkLen'
+    'WTVAjht1dQPsrdLlLxGcWPCESE/lTq7Y2jCDUwGwYQYn4EJOpuRq2QzID4DclT4r6aEYgBMpuJqnVgVZevYn/x5ghc5dmZnBohzA'
+    'sIMkbQYBgO41TIv2aCfgQu8beVJd2h7ow+UAoj36wEQVDgWh/B3Jj7VcgNW8RcoM7AC2YGO4JoDtyr4TzZA/cWCahJ/mQlkFxboB'
+    '+KpxJQCylhLOcKNMgJy1nNI6XFoQywWwUvKHeQaBAZiCUHHx5+PVFAdiHgCWbbKmKMMFhiBEKUKfpSi2wI5ADkLEGvqFcjsBgK0l'
+    'KJL8peDgJACs0OCF5NGEDkAyAf33AT0IlZcNLw6PVgIAZTIIx2BQDoDSUQw5Sl+AGkXLCZClR0Gxr1IJkKcGHMhBqJAAmUJangtN'
+    'ABrHQoBcRfhwLIqmvGHNHEcIVkd2oVwIZyKRPh40fF0JDgQht5cY5T1/vdLASqXT7iXrtITMFDdWmKQmNOOXETArs9hBwI47r80E'
+    'eHEO3K6TwaIBxYkBvK92b5crLR6/sPstICs7Jz46No8LDTi0gdjurmp0nwTI+xq3fTTO8ho2gI7+TWKWWRGh1MDWoJ9UK2Er0E8r'
+    '9mAisB9YGz2+2vKpcwGItdsMBMQ9BWq9EPlYA+oGIb3gqTnPfXgAkGAEV8HRJDmLFhLRhxWgyAiWZ3ucqejvMILFug5I6hGaE+Sz'
+    'll1i5jlPvJVGzHWjWXl/raecPSde9shUrTKAEeKNYjysUGIjX6z0eJxJPueUUs/5Htf5BfgCfAG+ADQA9YfHqz++X/0FCuqvsFB/'
+    'iYj6a1zUX6Sj/yoj7ZdJqb/OS/2FauqvtNN/qaD6ax3VX6yp/2pT/ZfLqr/eV/8Fy/qvuFZ/ybj+a951EUz0PwEUEUz1TwCMmrx0'
+    'qn8KMPTk6o2Az/77BtAT1D4eYJzrnwOYH2NizUbALg4iVwHMra3ZCP3rb29mC6B3oxSNasxOk6hg5u6zCGDa1twD1uZISVC499r2'
+    'AUbKELt6zJCUxGAWXv8KgLn6lGn7ELE73xC9hhiS9Iu/mlyAHvbe/0gQ53ZpjEl8/+LvfkXoP0ty7bM29qriAAAAAElFTkSuQmCC'
+    ),
+    'error': (
+    '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'
+    ),
+}
+
+
 # ── init ──────────────────────────────────────────────────────────────────────
 
 class Init:
@@ -1709,16 +2018,19 @@ class Init:
             self.note(SKIP, 'nb', 'nb not installed (npm install -g nb.sh, then init again)')
             return True
         for path, text in nb_scripts().items():
-            if path.exists():
-                if path.read_text(errors='replace') == text:
-                    self.note(OK, 'nb', f'{path}')
-                else:
-                    self.note(WARN, 'nb', f'{path} (not the one mobilize writes: left as it is)')
-                continue
             def write(path=path, text=text):
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_text(text)
                 path.chmod(0o755)
+            if path.exists():
+                have = path.read_text(errors='replace')
+                if have == text:
+                    self.note(OK, 'nb', f'{path}')
+                elif is_old_nb_script(path, have):
+                    self.act('nb', f'{path}: the newer one (notes go to `mobile` when there is one)', write)
+                else:
+                    self.note(WARN, 'nb', f'{path} (not the one mobilize writes: left as it is)')
+                continue
             self.act('nb', f'{path}', write)
         for name in ('nb-note', 'nb-quick'):
             icon = Path.home() / '.shortcuts' / 'icons' / f'{name}.png'
@@ -1795,11 +2107,58 @@ class Init:
             self.note(YOU, 't-quick', "its popups need Termux:API: pkg install termux-api")
         return True
 
+    def step_m_sync(self):
+        """m-sync: sync the nb notebooks that have a remote, once nb is installed. Also turns nb's
+        own auto_sync off: it would commit conflict markers into notes."""
+        if not is_termux():
+            self.note(SKIP, 'm-sync', 'Termux only')
+            return True
+        nb = shutil.which('nb')
+        if not nb:
+            self.note(SKIP, 'm-sync', 'nb not installed')
+            return True
+        path = Path.home() / '.shortcuts' / 'tasks' / 'm-sync'
+        if path.exists():
+            if path.read_text(errors='replace') == M_SYNC_TEXT:
+                self.note(OK, 'm-sync', f'{path}')
+            else:
+                self.note(WARN, 'm-sync', f'{path} (not the one mobilize writes: left as it is)')
+        else:
+            def write():
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(M_SYNC_TEXT)
+                path.chmod(0o755)
+            self.act('m-sync', f'{path}', write)
+        icons = Path.home() / '.shortcuts' / 'icons'
+        # amber until the first sync says otherwise
+        for name, key in (('.m-sync-ok.png', 'ok'), ('.m-sync-offline.png', 'offline'),
+                          ('.m-sync-error.png', 'error'), ('m-sync.png', 'offline')):
+            icon = icons / name
+            if icon.exists():
+                self.note(OK, 'm-sync', f'{icon}')
+                continue
+            self.act('m-sync', f'{icon}' + (" (re-add the widget to see it)" if name == 'm-sync.png' else ''),
+                     lambda icon=icon, key=key: (icon.parent.mkdir(parents=True, exist_ok=True),
+                                                 icon.write_bytes(base64.b64decode(M_SYNC_ICONS[key]))))
+        try:
+            auto = run(['bash', nb, 'settings', 'get', 'auto_sync'], stdin=subprocess.DEVNULL,
+                       env={'NO_COLOR': '1'}, timeout=60).stdout.strip()
+        except subprocess.TimeoutExpired:
+            auto = ''
+        if auto == '1':
+            self.act('m-sync', "nb's auto_sync off (m-sync syncs; nb's own sync commits conflict markers)",
+                     lambda: run(['bash', nb, 'set', 'auto_sync', '0'], stdin=subprocess.DEVNULL, timeout=60))
+        elif auto == '0':
+            self.note(OK, 'm-sync', "nb's auto_sync is off")
+        if not shutil.which('termux-toast'):
+            self.note(YOU, 'm-sync', "its toasts and icon need Termux:API: pkg install termux-api")
+        return True
+
     def run(self):
         steps = [self.step_identity, self.step_packages, self.step_task, self.step_key, self.step_clone,
                  self.step_push, self.step_git_identity, self.step_merge_driver, self.step_taskrc, self.step_local_rc, self.step_state_files, self.step_hooks, self.step_path,
                  self.step_mobilize_rc, self.step_commit, self.step_web, self.step_launcher,
-                 self.step_icon, self.step_autostart, self.step_nb, self.step_hledger_web, self.step_t_quick]
+                 self.step_icon, self.step_autostart, self.step_nb, self.step_m_sync, self.step_hledger_web, self.step_t_quick]
         self.out(f'mobilize init{" (dry run: nothing changes)" if self.dry else ""}')
         for step in steps:
             try:
