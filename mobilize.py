@@ -63,7 +63,7 @@ import sys
 import urllib.request
 from pathlib import Path
 
-__version__ = '0.10.1'
+__version__ = '0.10.2'
 # The nb-plugin `nb tw` (tw-nb-interop): tw2nb's hooks and the tasknotes notebook need it
 TW_NB_PLUGIN_URL = 'https://raw.githubusercontent.com/linuxcaffe/nb-plugins/main/tw.nb-plugin'
 
@@ -763,14 +763,16 @@ exec "$HOME/.shortcuts/tasks/nb-quick" "$1"
 
 
 # sha256 of scripts older mobilizes wrote: init replaces one of these, since nobody edited it,
-# and leaves any other text alone. nb-note, nb-quick: 0.7.0-0.8.3, 0.9.0-0.9.1; m-sync: 0.9.0-0.9.1, 0.9.2.
+# and leaves any other text alone. nb-note, nb-quick: 0.7.0-0.8.3, 0.9.0-0.9.1; m-sync: 0.9.0-0.9.1, 0.9.2,
+# 0.10.0-0.10.1.
 OLD_SCRIPTS = {
     'nb-note': {'042e6eb833ee00b0daed8df55b9d0aea2e6a27e735eb08085012e46b9afaa9ec',
                 '0b5b8c74962c916772ad2ff08f4b0137d44170d8291d40bb619aab9d3941935c'},
     'nb-quick': {'19e5b53c4d5e684ff4eb118cab407edbb76fc182b200c1765b690e35bffd4222',
                  'eb228cbc5530e3d286137ee489ef15718a3edc4ff1467217753d950f006545bf'},
     'm-sync': {'88cba17329d8bd21fa674886d7a185005236bce35debd07c416348593e4c8659',
-               '6777b9564e21d36a7ad9899b6ad2df5884606fa295fd5ebc858fcdc8d0c6dcdc'},
+               '6777b9564e21d36a7ad9899b6ad2df5884606fa295fd5ebc858fcdc8d0c6dcdc',
+               '960697077910ee4208b6b990b98193cb6a4c6cf64b3a7a18e6e4efa1b6e6955a'},
 }
 
 
@@ -1488,6 +1490,11 @@ else
     mkdir "$LOCK" 2>/dev/null || { toast "m-sync: already running"; exit 0; }
 fi
 trap 'rmdir "$LOCK"' EXIT
+
+# tw-web on this phone checks for its own update now, not within the hour (0.10.2): in the
+# background, quietly; nothing happens when it isn't running
+("$P/curl" -s -m 60 -o /dev/null -X POST "${M_SYNC_TW_WEB:-http://localhost:5000}/api/version/check" \
+    </dev/null >/dev/null 2>&1 &)
 
 if [ $# -gt 0 ]; then names=("$@"); else mapfile -t names < <(shared); fi
 if [ ${#names[@]} -eq 0 ]; then

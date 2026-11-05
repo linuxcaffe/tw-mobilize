@@ -806,6 +806,39 @@ def test_init_collects_the_phone_data_in_mobile(home, monkeypatch):
     assert journal.read_text() == text, 'nothing moved twice'
 
 
+def test_m_sync_asks_tw_web_to_check_for_its_update(tmp_path):
+    """0.10.2 (djp 2026-11-05): tw-web fetched its upstream hourly, so its update pill came up to
+    an hour late; every m-sync run (every 15 minutes, or by hand) asks it to check now, in the
+    background, whether or not there are notebooks to sync."""
+    bin_ = tmp_path / 'bin'
+    bin_.mkdir()
+    for tool in ('bash', 'sed', 'tail', 'mv', 'mkdir', 'rmdir', 'cat', 'date', 'printf', 'sleep'):
+        if shutil.which(tool):
+            (bin_ / tool).symlink_to(shutil.which(tool))
+    log = tmp_path / 'curl.log'
+    (bin_ / 'curl').write_text(f'#!/bin/sh\necho "$@" >> {log}\n')
+    (bin_ / 'curl').chmod(0o755)
+    h = tmp_path / 'h'
+    (h / '.task').mkdir(parents=True)
+    (h / 'nb').mkdir()
+    env = dict(os.environ, HOME=str(h), NB_DIR=str(h / 'nb'), M_SYNC_BIN=str(bin_),
+               M_SYNC_LOG=str(tmp_path / 'log'), TMPDIR=str(tmp_path))
+    script = tmp_path / 'm-sync'
+    script.write_text(mobilize.M_SYNC_TEXT)
+    r = subprocess.run(['bash', str(script), '--quiet'], env=env, capture_output=True, text=True)
+    assert r.returncode == 0, r.stdout + r.stderr
+    for _ in range(50):
+        if log.exists():
+            break
+        time.sleep(0.1)
+    args = log.read_text().split()
+    assert 'POST' in args and 'http://localhost:5000/api/version/check' in args
+
+
+def test_the_0_10_1_m_sync_is_replaced_when_untouched():
+    assert '960697077910ee4208b6b990b98193cb6a4c6cf64b3a7a18e6e4efa1b6e6955a' in mobilize.OLD_SCRIPTS['m-sync']
+
+
 def test_m_sync_is_valid_bash():
     r = subprocess.run(['bash', '-n'], input=mobilize.M_SYNC_TEXT, capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
