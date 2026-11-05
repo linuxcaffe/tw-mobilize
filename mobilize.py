@@ -63,7 +63,9 @@ import sys
 import urllib.request
 from pathlib import Path
 
-__version__ = '0.10.0'
+__version__ = '0.10.1'
+# The nb-plugin `nb tw` (tw-nb-interop): tw2nb's hooks and the tasknotes notebook need it
+TW_NB_PLUGIN_URL = 'https://raw.githubusercontent.com/linuxcaffe/nb-plugins/main/tw.nb-plugin'
 
 OK, DONE, WOULD, SKIP, WARN, FAIL, YOU = 'ok', 'done', 'would', 'skip', 'warn', 'fail', 'you'
 
@@ -2094,6 +2096,46 @@ class Init:
                                      + (' (block rewritten)' if state else ''),
                         lambda: bashrc.write_text(with_autostart(text)))
 
+    def step_nb_plugins(self):
+        """The nb-plugin tw (nb-plugins' tw.nb-plugin), wherever something calls `nb tw`: tw2nb's
+        hooks, or a tasknotes notebook (tw-nb-interop). Missing, it's installed (djp 2026-11-04:
+        "just installing it is the right thing ... install it now? (Y/n)"): asked at a terminal
+        (Enter = yes), done with --yes, and with no terminal never asked, only named. One already
+        there is kept, a symlink into a dev repo too; a dangling one counts as missing."""
+        nb = shutil.which('nb')
+        if not nb:
+            self.note(SKIP, 'nb-plugin', 'nb not installed')
+            return True
+        nb_root = Path(os.environ.get('NB_DIR') or Path.home() / '.nb')
+        hooks = task_dir() / 'hooks'
+        needs = [w for w, there in (
+            ("tw2nb's hooks", any(os.access(h, os.X_OK) for h in hooks.glob('*_tw2nb.py'))),
+            ('the tasknotes notebook', (nb_root / 'tasknotes' / '.git').is_dir())) if there]
+        if not needs:
+            self.note(SKIP, 'nb-plugin', 'nothing here calls `nb tw`')
+            return True
+        plugin = nb_root / '.plugins' / 'tw.nb-plugin'
+        if plugin.exists():                                   # a symlink must resolve
+            self.note(OK, 'nb-plugin', f'tw ({plugin})')
+            return True
+        cmd = f'nb plugins install {TW_NB_PLUGIN_URL}'
+        why = f"nb-plugin tw is required ({' and '.join(needs)} call `nb tw`)"
+        if self.interactive():
+            answer = input(f'          {why}: missing. Install it now? [Y/n] ').strip().lower()
+            if answer not in ('', 'y', 'yes'):
+                self.note(YOU, 'nb-plugin', f'{why}: missing. Install it with: {cmd}')
+                return True
+        elif not self.yes:
+            self.note(YOU, 'nb-plugin', f'{why}: missing. Install it with: {cmd}')
+            return True
+
+        def install():
+            r = run(['bash', nb, 'plugins', 'install', TW_NB_PLUGIN_URL], stdin=subprocess.DEVNULL, timeout=120)
+            if not plugin.exists():
+                last = ((r.stderr or r.stdout).strip().splitlines() or ['no output'])[-1]
+                raise SystemExit(f'mobilize: {cmd} failed: {last}')
+        return self.act('nb-plugin', f'tw, from nb-plugins ({cmd})', install)
+
     def step_nb(self):
         """nb's quick-note buttons, once nb is installed: nb-note (a terminal), nb-quick
         (Android popups, no terminal) and Share -> Termux."""
@@ -2341,7 +2383,7 @@ class Init:
         steps = [self.step_identity, self.step_packages, self.step_task, self.step_key, self.step_clone,
                  self.step_push, self.step_git_identity, self.step_merge_driver, self.step_taskrc, self.step_local_rc, self.step_state_files, self.step_hooks, self.step_path,
                  self.step_mobilize_rc, self.step_commit, self.step_web, self.step_launcher,
-                 self.step_icon, self.step_autostart, self.step_nb, self.step_m_sync, self.step_collect, self.step_hledger_web, self.step_t_quick]
+                 self.step_icon, self.step_autostart, self.step_nb, self.step_nb_plugins, self.step_m_sync, self.step_collect, self.step_hledger_web, self.step_t_quick]
         self.out(f'mobilize init{" (dry run: nothing changes)" if self.dry else ""}')
         for step in steps:
             try:

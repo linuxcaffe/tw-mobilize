@@ -1284,3 +1284,95 @@ def test_step_web_fails_when_tw_does(home, monkeypatch):
     tw.chmod(0o755)
     with pytest.raises(SystemExit, match='tw -I tw-web failed'):
         _web_init([]).step_web()
+
+
+# ── nb-plugin tw: required where tw2nb's hooks run, installed when missing (djp 2026-11-04) ──
+# "When an nb-plugin (one we wrote) is found missing, just installing it is the right thing,
+# perhaps with 'nb-plugin xyz is required, install it now? (Y/n)'". At a terminal it asks (Enter
+# = yes); --yes installs without asking; with no terminal it never asks, it names the command.
+
+def _plugin_station(home, tmp_path, monkeypatch, hook=True, tasknotes=False):
+    bin_ = tmp_path / 'bin'
+    bin_.mkdir(exist_ok=True)
+    log = tmp_path / 'nb-calls'
+    (bin_ / 'nb').write_text('#!/bin/sh\n'
+                             f'echo "$*" >> "{log}"\n'
+                             'if [ "$1 $2" = "plugins install" ]; then\n'
+                             '  mkdir -p "$HOME/.nb/.plugins" && echo "# tw" > "$HOME/.nb/.plugins/tw.nb-plugin"\n'
+                             'fi\n')
+    (bin_ / 'nb').chmod(0o755)
+    monkeypatch.setenv('PATH', f"{bin_}:/usr/bin:/bin")
+    (home / '.task' / 'hooks').mkdir(parents=True, exist_ok=True)
+    if hook:
+        h = home / '.task' / 'hooks' / 'on-exit_tw2nb.py'
+        h.write_text('#!/usr/bin/env python3\n')
+        h.chmod(0o755)
+    if tasknotes:
+        (home / '.nb' / 'tasknotes' / '.git').mkdir(parents=True)
+    notes = []
+    init = _termux_init(notes)
+    init.yes = False
+    return init, notes, log, home / '.nb' / '.plugins' / 'tw.nb-plugin'
+
+
+def _calls(log):
+    return log.read_text().splitlines() if log.exists() else []
+
+
+def test_nb_plugin_asked_for_at_a_terminal_enter_installs(home, tmp_path, monkeypatch):
+    init, notes, log, plugin = _plugin_station(home, tmp_path, monkeypatch)
+    init.interactive = lambda: True
+    asked = []
+    monkeypatch.setattr('builtins.input', lambda q='': asked.append(q) or '')
+    assert init.step_nb_plugins()
+    assert 'nb-plugin tw is required' in asked[0] and '[Y/n]' in asked[0]
+    assert _calls(log) == [f'plugins install {mobilize.TW_NB_PLUGIN_URL}']
+    assert plugin.is_file()
+
+
+def test_nb_plugin_no_leaves_it_and_names_the_command(home, tmp_path, monkeypatch):
+    init, notes, log, plugin = _plugin_station(home, tmp_path, monkeypatch)
+    init.interactive = lambda: True
+    monkeypatch.setattr('builtins.input', lambda q='': 'n')
+    assert init.step_nb_plugins()
+    assert _calls(log) == [] and not plugin.exists()
+    assert notes[-1][0] == mobilize.YOU and f'nb plugins install {mobilize.TW_NB_PLUGIN_URL}' in notes[-1][1]
+
+
+def test_nb_plugin_without_a_terminal_never_asks(home, tmp_path, monkeypatch):
+    init, notes, log, plugin = _plugin_station(home, tmp_path, monkeypatch)
+    init.interactive = lambda: False
+    monkeypatch.setattr('builtins.input', lambda q='': pytest.fail('asked with no terminal'))
+    assert init.step_nb_plugins()
+    assert _calls(log) == [] and notes[-1][0] == mobilize.YOU
+
+
+def test_nb_plugin_yes_installs_without_asking(home, tmp_path, monkeypatch):
+    init, notes, log, plugin = _plugin_station(home, tmp_path, monkeypatch)
+    init.yes, init.interactive = True, lambda: False
+    monkeypatch.setattr('builtins.input', lambda q='': pytest.fail('--yes asked'))
+    assert init.step_nb_plugins()
+    assert plugin.is_file()
+
+
+def test_nb_plugin_present_or_not_needed(home, tmp_path, monkeypatch):
+    init, notes, log, plugin = _plugin_station(home, tmp_path, monkeypatch, hook=False)
+    assert init.step_nb_plugins() and _calls(log) == []          # nothing here calls nb tw
+    assert notes[-1][0] == mobilize.SKIP
+    init, notes, log, plugin = _plugin_station(home, tmp_path, monkeypatch, hook=False, tasknotes=True)
+    plugin.parent.mkdir(parents=True, exist_ok=True)
+    target = tmp_path / 'dev-tw.nb-plugin'
+    target.write_text('# dev copy\n')
+    plugin.symlink_to(target)                                      # yoga's: a link into the repo
+    assert init.step_nb_plugins() and _calls(log) == []
+    assert notes[-1][0] == mobilize.OK
+    assert target.read_text() == '# dev copy\n'                    # never replaced
+
+
+def test_nb_plugin_a_dangling_link_counts_as_missing(home, tmp_path, monkeypatch):
+    init, notes, log, plugin = _plugin_station(home, tmp_path, monkeypatch)
+    plugin.parent.mkdir(parents=True, exist_ok=True)
+    plugin.symlink_to(tmp_path / 'gone')
+    init.interactive = lambda: False
+    assert init.step_nb_plugins()
+    assert notes[-1][0] == mobilize.YOU and 'missing' in notes[-1][1]
