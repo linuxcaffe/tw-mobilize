@@ -63,8 +63,8 @@ import sys
 import urllib.request
 from pathlib import Path
 
-__version__ = '0.10.2'
-# The nb-plugin `nb tw` (tw-nb-interop): tw2nb's hooks and the tasknotes notebook need it
+__version__ = '0.10.3'
+# The nb-plugin `nb tw` (tw-nb-interop): the nbnotes hook and the tasknotes notebook need it
 TW_NB_PLUGIN_URL = 'https://raw.githubusercontent.com/linuxcaffe/nb-plugins/main/tw.nb-plugin'
 
 OK, DONE, WOULD, SKIP, WARN, FAIL, YOU = 'ok', 'done', 'would', 'skip', 'warn', 'fail', 'you'
@@ -2104,8 +2104,8 @@ class Init:
                         lambda: bashrc.write_text(with_autostart(text)))
 
     def step_nb_plugins(self):
-        """The nb-plugin tw (nb-plugins' tw.nb-plugin), wherever something calls `nb tw`: tw2nb's
-        hooks, or a tasknotes notebook (tw-nb-interop). Missing, it's installed (djp 2026-11-04:
+        """The nb-plugin tw (nb-plugins' tw.nb-plugin), wherever something calls `nb tw`: the
+        nbnotes hook (tw2nb's on-exit before tw2nb 1.5.0), or a tasknotes notebook (tw-nb-interop). Missing, it's installed (djp 2026-11-04:
         "just installing it is the right thing ... install it now? (Y/n)"): asked at a terminal
         (Enter = yes), done with --yes, and with no terminal never asked, only named. One already
         there is kept, a symlink into a dev repo too; a dangling one counts as missing."""
@@ -2116,7 +2116,9 @@ class Init:
         nb_root = Path(os.environ.get('NB_DIR') or Path.home() / '.nb')
         hooks = task_dir() / 'hooks'
         needs = [w for w, there in (
-            ("tw2nb's hooks", any(os.access(h, os.X_OK) for h in hooks.glob('*_tw2nb.py'))),
+            # nbnotes' hook (tw2nb's on-exit until tw2nb 1.5.0) makes and updates task notes
+            ('the nbnotes hook', any(os.access(hooks / h, os.X_OK)
+                                     for h in ('on-exit_nbnotes.py', 'on-exit_tw2nb.py'))),
             ('the tasknotes notebook', (nb_root / 'tasknotes' / '.git').is_dir())) if there]
         if not needs:
             self.note(SKIP, 'nb-plugin', 'nothing here calls `nb tw`')

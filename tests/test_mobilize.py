@@ -1324,7 +1324,7 @@ def test_step_web_fails_when_tw_does(home, monkeypatch):
 # perhaps with 'nb-plugin xyz is required, install it now? (Y/n)'". At a terminal it asks (Enter
 # = yes); --yes installs without asking; with no terminal it never asks, it names the command.
 
-def _plugin_station(home, tmp_path, monkeypatch, hook=True, tasknotes=False):
+def _plugin_station(home, tmp_path, monkeypatch, hook='on-exit_nbnotes.py', tasknotes=False):
     bin_ = tmp_path / 'bin'
     bin_.mkdir(exist_ok=True)
     log = tmp_path / 'nb-calls'
@@ -1337,7 +1337,7 @@ def _plugin_station(home, tmp_path, monkeypatch, hook=True, tasknotes=False):
     monkeypatch.setenv('PATH', f"{bin_}:/usr/bin:/bin")
     (home / '.task' / 'hooks').mkdir(parents=True, exist_ok=True)
     if hook:
-        h = home / '.task' / 'hooks' / 'on-exit_tw2nb.py'
+        h = home / '.task' / 'hooks' / hook
         h.write_text('#!/usr/bin/env python3\n')
         h.chmod(0o755)
     if tasknotes:
@@ -1346,6 +1346,14 @@ def _plugin_station(home, tmp_path, monkeypatch, hook=True, tasknotes=False):
     init = _termux_init(notes)
     init.yes = False
     return init, notes, log, home / '.nb' / '.plugins' / 'tw.nb-plugin'
+
+
+def test_nb_plugin_wanted_by_tw2nb_1_4s_on_exit_too(home, tmp_path, monkeypatch):
+    """Until tw2nb 1.5.0 the nbnotes hook was tw2nb's on-exit; tw2nb 1.5's other hooks don't call nb tw."""
+    init, notes, log, plugin = _plugin_station(home, tmp_path, monkeypatch, hook='on-exit_tw2nb.py')
+    init.interactive = lambda: False
+    init.step_nb_plugins()
+    assert notes[-1][0] == mobilize.YOU and 'the nbnotes hook' in notes[-1][1]
 
 
 def _calls(log):
