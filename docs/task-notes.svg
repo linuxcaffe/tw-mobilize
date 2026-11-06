@@ -1,0 +1,116 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 830" width="1000" height="830" role="img" aria-labelledby="ttl dsc">
+<title id="ttl">Task notes: the round trip</title>
+<desc id="dsc">A bare nb: annotation on the phone makes the task's note there. ~/.task and the tasknotes notebook each sync through a git remote to the desktop, where the link opens the note in nb-web. Finishing the task updates the note's status, which syncs back the same way.</desc>
+<style>
+text { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; fill: #1f2328; }
+.h { font-size: 18px; font-weight: 600; }
+.t { font-size: 15px; font-weight: 600; }
+.s, .l { font-size: 13px; fill: #59636e; }
+.m { font-size: 12.5px; fill: #59636e; font-family: ui-monospace, "SF Mono", Menlo, monospace; }
+.col { fill: #ffffff; stroke: #d0d7de; }
+.box, .obox { fill: #f6f8fa; stroke: #d0d7de; }
+.obox { stroke-dasharray: 5 4; }
+.rbox { fill: #fff8c5; stroke: #d4a72c; }
+.step, .hh { fill: #0969da; }
+.stepn { fill: #ffffff; font-size: 13px; font-weight: 700; }
+.a { fill: none; stroke: #0969da; stroke-width: 2; }
+.dash { fill: none; stroke: #59636e; stroke-width: 1.6; stroke-dasharray: 6 5; }
+.hd { fill: #59636e; }
+@media (prefers-color-scheme: dark) {
+  text { fill: #e6edf3; }
+  .s, .l, .m { fill: #9198a1; }
+  .col { fill: #0d1117; stroke: #3d444d; }
+  .box, .obox { fill: #161b22; stroke: #3d444d; }
+  .rbox { fill: #2e2a10; stroke: #9e6a03; }
+  .step, .hh { fill: #4493f8; }
+  .a { stroke: #4493f8; }
+  .dash { stroke: #9198a1; }
+  .hd { fill: #9198a1; }
+}
+</style>
+<defs>
+<marker id="h" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="hh" d="M0 0 L10 5 L0 10 z"/></marker>
+<marker id="hd" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="hd" d="M0 0 L10 5 L0 10 z"/></marker>
+</defs>
+<rect class="col" x="10" y="14" width="320" height="770" rx="12"/>
+<text class="h" x="170.0" y="42" text-anchor="middle">Phone</text>
+<text class="s" x="170.0" y="60" text-anchor="middle">Termux</text>
+<rect class="col" x="360" y="14" width="280" height="770" rx="12"/>
+<text class="h" x="500.0" y="42" text-anchor="middle">Git remotes</text>
+<text class="s" x="500.0" y="60" text-anchor="middle">shared by every station</text>
+<rect class="col" x="670" y="14" width="320" height="770" rx="12"/>
+<text class="h" x="830.0" y="42" text-anchor="middle">Desktop</text>
+<text class="s" x="830.0" y="60" text-anchor="middle">nb-web, tw-web</text>
+<rect class="box" x="20" y="80" width="300" height="66" rx="8"/>
+<circle class="step" cx="40" cy="113.0" r="12"/><text class="stepn" x="40" y="118.0" text-anchor="middle">1</text>
+<text class="t" x="60" y="107">Ask (here, or in tw-web)</text>
+<text class="m" x="60" y="129">task 42 annotate nb:</text>
+<rect class="box" x="20" y="176" width="300" height="66" rx="8"/>
+<circle class="step" cx="40" cy="209.0" r="12"/><text class="stepn" x="40" y="214.0" text-anchor="middle">2</text>
+<text class="t" x="60" y="203">Make: nb tw note</text>
+<text class="s" x="60" y="225">nbnotes' hook, no network needed</text>
+<rect class="box" x="20" y="272" width="300" height="66" rx="8"/>
+<text class="t" x="34" y="299">The note, and the link to it</text>
+<text class="m" x="34" y="321">nb: tasknotes:kitchen/…note.md</text>
+<rect class="box" x="20" y="392" width="300" height="66" rx="8"/>
+<circle class="step" cx="40" cy="425.0" r="12"/><text class="stepn" x="40" y="430.0" text-anchor="middle">3</text>
+<text class="t" x="60" y="419">~/.task</text>
+<text class="s" x="60" y="441">gittw commits; tw-web pushes</text>
+<rect class="box" x="20" y="488" width="300" height="66" rx="8"/>
+<circle class="step" cx="40" cy="521.0" r="12"/><text class="stepn" x="40" y="526.0" text-anchor="middle">4</text>
+<text class="t" x="60" y="515">~/.nb/tasknotes</text>
+<text class="s" x="60" y="537">m-sync pushes (every 15 min)</text>
+<rect class="box" x="20" y="608" width="300" height="66" rx="8"/>
+<text class="t" x="34" y="635">Open it on the phone</text>
+<text class="s" x="34" y="657">nb-web if it answers, else Documents</text>
+<rect class="rbox" x="370" y="392" width="260" height="66" rx="8"/>
+<text class="t" x="384" y="419">~/.task repo</text>
+<text class="s" x="384" y="441">branch master</text>
+<rect class="rbox" x="370" y="488" width="260" height="66" rx="8"/>
+<text class="t" x="384" y="515">nb notes repo</text>
+<text class="s" x="384" y="537">branch tasknotes</text>
+<rect class="obox" x="680" y="80" width="300" height="66" rx="8"/>
+<text class="t" x="694" y="107">The same hooks</text>
+<text class="s" x="694" y="129">nbnotes (+ tw2nb: archive, journal)</text>
+<rect class="box" x="680" y="392" width="300" height="66" rx="8"/>
+<text class="t" x="694" y="419">~/.task</text>
+<text class="s" x="694" y="441">tw-web's auto-sync pulls (or Sync)</text>
+<rect class="box" x="680" y="488" width="300" height="66" rx="8"/>
+<text class="t" x="694" y="515">~/.nb/tasknotes</text>
+<text class="s" x="694" y="537">nb-web's Sync pulls</text>
+<rect class="box" x="680" y="608" width="300" height="66" rx="8"/>
+<circle class="step" cx="700" cy="641.0" r="12"/><text class="stepn" x="700" y="646.0" text-anchor="middle">5</text>
+<text class="t" x="720" y="635">Open: tw-web link → nb-web</text>
+<text class="s" x="720" y="657">the note, with the task header</text>
+<rect class="box" x="680" y="704" width="300" height="66" rx="8"/>
+<circle class="step" cx="700" cy="737.0" r="12"/><text class="stepn" x="700" y="742.0" text-anchor="middle">6</text>
+<text class="t" x="720" y="731">Follow: task 42 done</text>
+<text class="s" x="720" y="753">nbnotes → nb tw status → tw_status</text>
+<path class="a" d="M170.0 146 V172" marker-end="url(#h)"/>
+<path class="a" d="M170.0 242 V268" marker-end="url(#h)"/>
+<path class="a" d="M170.0 338 V388" marker-end="url(#h)"/>
+<path class="a" d="M20 305 H6 V521 H16" marker-end="url(#h)"/>
+<text class="l" x="178.0" y="368" text-anchor="start">the link is in the task</text>
+<path class="a" d="M170.0 554 V604" marker-end="url(#h)"/>
+<path class="a" d="M320 425 H366" marker-end="url(#h)"/>
+<path class="a" d="M630 425 H676" marker-end="url(#h)"/>
+<path class="a" d="M320 521 H366" marker-end="url(#h)"/>
+<path class="a" d="M630 521 H676" marker-end="url(#h)"/>
+<text class="l" x="345.0" y="415" text-anchor="middle">push</text>
+<text class="l" x="655.0" y="415" text-anchor="middle">pull</text>
+<text class="l" x="345.0" y="511" text-anchor="middle">push</text>
+<text class="l" x="655.0" y="511" text-anchor="middle">pull</text>
+<path class="a" d="M830.0 554 V604" marker-end="url(#h)"/>
+<path class="a" d="M980 425 H994 V641 H984" marker-end="url(#h)"/>
+<path class="a" d="M830.0 674 V700" marker-end="url(#h)"/>
+<path class="dash" d="M940 392 V150" marker-end="url(#hd)"/>
+<text class="l" x="934" y="300" text-anchor="end">hooks arrive</text>
+<text class="l" x="934" y="316" text-anchor="end">with ~/.task</text>
+<path class="dash" d="M680 737 H500.0 V558" marker-end="url(#hd)"/>
+<text class="l" x="508.0" y="700" text-anchor="start">status syncs back</text>
+<text class="l" x="508.0" y="716" text-anchor="start">the same way</text>
+<path class="a" d="M24 810 H64"/>
+<text class="l" x="72" y="815" text-anchor="start">this walk-through</text>
+<path class="dash" d="M224 810 H264"/>
+<text class="l" x="272" y="815" text-anchor="start">arrives later, or goes back</text>
+</svg>
