@@ -1417,3 +1417,66 @@ def test_nb_plugin_a_dangling_link_counts_as_missing(home, tmp_path, monkeypatch
     init.interactive = lambda: False
     assert init.step_nb_plugins()
     assert notes[-1][0] == mobilize.YOU and 'missing' in notes[-1][1]
+
+
+# ── 0.10.4: the phone's copy of the plugin is brought up to date (djp 2026-11-05: s5's tw.nb-plugin
+# was older than yoga's; tw never updates there, being the update station's job, and ~/.nb/.plugins
+# isn't shared). An ordinary copy that differs is replaced, quietly; a link never is. ─────────────
+
+def _plugin_there(home, text):
+    plugin = home / '.nb' / '.plugins' / 'tw.nb-plugin'
+    plugin.parent.mkdir(parents=True, exist_ok=True)
+    plugin.write_text(text)
+    plugin.chmod(0o755)
+    return plugin
+
+
+def test_nb_plugin_an_old_copy_is_updated(home, tmp_path, monkeypatch):
+    init, notes, log, plugin = _plugin_station(home, tmp_path, monkeypatch)
+    init.act = mobilize.Init.act.__get__(init)            # the real one: it records a note
+    _plugin_there(home, '# tw old\n')
+    monkeypatch.setattr(mobilize, 'fetch_bytes', lambda url, timeout=30: b'# tw new\n')
+    assert init.step_nb_plugins()
+    assert plugin.read_text() == '# tw new\n' and plugin.stat().st_mode & 0o111
+    assert notes[-1][0] == mobilize.DONE and 'updated' in notes[-1][1]
+
+
+def test_nb_plugin_a_current_copy_is_ok(home, tmp_path, monkeypatch):
+    init, notes, log, plugin = _plugin_station(home, tmp_path, monkeypatch)
+    _plugin_there(home, '# tw\n')
+    monkeypatch.setattr(mobilize, 'fetch_bytes', lambda url, timeout=30: b'# tw\n')
+    assert init.step_nb_plugins()
+    assert notes[-1][0] == mobilize.OK and 'up to date' in notes[-1][1]
+
+
+def test_nb_plugin_offline_keeps_the_copy(home, tmp_path, monkeypatch):
+    init, notes, log, plugin = _plugin_station(home, tmp_path, monkeypatch)
+    _plugin_there(home, '# tw old\n')
+
+    def offline(url, timeout=30):
+        raise OSError('network is unreachable')
+    monkeypatch.setattr(mobilize, 'fetch_bytes', offline)
+    assert init.step_nb_plugins()
+    assert plugin.read_text() == '# tw old\n'
+    assert notes[-1][0] == mobilize.OK and "couldn't check" in notes[-1][1]
+
+
+def test_nb_plugin_dry_run_only_says(home, tmp_path, monkeypatch):
+    init, notes, log, plugin = _plugin_station(home, tmp_path, monkeypatch)
+    _plugin_there(home, '# tw old\n')
+    init.act = mobilize.Init.act.__get__(init)            # the real one honours --dry-run
+    init.dry = True
+    monkeypatch.setattr(mobilize, 'fetch_bytes', lambda url, timeout=30: b'# tw new\n')
+    assert init.step_nb_plugins()
+    assert plugin.read_text() == '# tw old\n' and notes[-1][0] == mobilize.WOULD
+
+
+def test_nb_plugin_a_link_is_never_fetched(home, tmp_path, monkeypatch):
+    init, notes, log, plugin = _plugin_station(home, tmp_path, monkeypatch)
+    plugin.parent.mkdir(parents=True, exist_ok=True)
+    dev = tmp_path / 'dev-tw.nb-plugin'
+    dev.write_text('# dev\n')
+    plugin.symlink_to(dev)
+    monkeypatch.setattr(mobilize, 'fetch_bytes', lambda url, timeout=30: pytest.fail('fetched for a link'))
+    assert init.step_nb_plugins()
+    assert dev.read_text() == '# dev\n' and notes[-1][0] == mobilize.OK

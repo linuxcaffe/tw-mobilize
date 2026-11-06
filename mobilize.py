@@ -63,9 +63,15 @@ import sys
 import urllib.request
 from pathlib import Path
 
-__version__ = '0.10.3'
+__version__ = '0.10.4'
 # The nb-plugin `nb tw` (tw-nb-interop): the nbnotes hook and the tasknotes notebook need it
 TW_NB_PLUGIN_URL = 'https://raw.githubusercontent.com/linuxcaffe/nb-plugins/main/tw.nb-plugin'
+
+
+def fetch_bytes(url, timeout=30):
+    """A URL's content (raises OSError when the network doesn't answer)."""
+    with urllib.request.urlopen(url, timeout=timeout) as r:
+        return r.read()
 
 OK, DONE, WOULD, SKIP, WARN, FAIL, YOU = 'ok', 'done', 'would', 'skip', 'warn', 'fail', 'you'
 
@@ -333,7 +339,7 @@ mobilize.data.push = {push}
 
 # ── tw-web ────────────────────────────────────────────────────────────────────
 #
-# tw-web comes from `tw -I tw-web` (https from Codeberg, else GitHub: no key needed, so a
+# tw-web comes from `tw -I tw-web` (https from GitHub, else Codeberg: no key needed, so a
 # station can run tw-web without being able to push to it). The folder it goes in is per
 # station: mobilize.web.dir in local.rc (default {WEB_DIR}); a folder named there is used
 # as it is (a development checkout).
@@ -2018,7 +2024,7 @@ class Init:
         return self.act('commit', f"{', '.join(rels)} (not pushed: gittw sync does that)", commit)
 
     def step_web(self):
-        """tw-web is tw's to install (tw -I tw-web, 0.8.2): it clones it (Codeberg, else GitHub) into
+        """tw-web is tw's to install (tw -I tw-web, 0.8.2): it clones it (GitHub, else Codeberg) into
         mobilize.web.dir or ~/.local/share/tw-web and installs its Python packages."""
         if not self.web:
             self.note(SKIP, 'tw-web', '--no-web')
@@ -2108,7 +2114,8 @@ class Init:
         nbnotes hook (tw2nb's on-exit before tw2nb 1.5.0), or a tasknotes notebook (tw-nb-interop). Missing, it's installed (djp 2026-11-04:
         "just installing it is the right thing ... install it now? (Y/n)"): asked at a terminal
         (Enter = yes), done with --yes, and with no terminal never asked, only named. One already
-        there is kept, a symlink into a dev repo too; a dangling one counts as missing."""
+        there is brought up to date when it's an ordinary copy (0.10.4), and never touched when
+        it's a symlink into a dev repo; a dangling one counts as missing."""
         nb = shutil.which('nb')
         if not nb:
             self.note(SKIP, 'nb-plugin', 'nb not installed')
@@ -2124,9 +2131,27 @@ class Init:
             self.note(SKIP, 'nb-plugin', 'nothing here calls `nb tw`')
             return True
         plugin = nb_root / '.plugins' / 'tw.nb-plugin'
-        if plugin.exists():                                   # a symlink must resolve
-            self.note(OK, 'nb-plugin', f'tw ({plugin})')
+        if plugin.is_symlink() and plugin.exists():           # a dev checkout's: never touched
+            self.note(OK, 'nb-plugin', f'tw ({plugin}, a link)')
             return True
+        if plugin.is_file():
+            # 0.10.4: brought up to date, quietly (djp 2026-11-05: s5's had fallen behind yoga's;
+            # tw doesn't update here, and ~/.nb/.plugins isn't shared)
+            try:
+                new = fetch_bytes(TW_NB_PLUGIN_URL)
+            except (OSError, ValueError) as e:
+                self.note(OK, 'nb-plugin', f"tw (couldn't check for an update: {e})")
+                return True
+            if not new.strip() or new == plugin.read_bytes():
+                self.note(OK, 'nb-plugin', 'tw, up to date')
+                return True
+
+            def update():
+                tmp = plugin.with_name(plugin.name + '.new')
+                tmp.write_bytes(new)
+                tmp.chmod(plugin.stat().st_mode & 0o777)
+                tmp.replace(plugin)
+            return self.act('nb-plugin', 'tw, updated from nb-plugins', update)
         cmd = f'nb plugins install {TW_NB_PLUGIN_URL}'
         why = f"nb-plugin tw is required ({' and '.join(needs)} call `nb tw`)"
         if self.interactive():

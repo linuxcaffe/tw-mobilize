@@ -2,7 +2,7 @@
 # Sets up a station (an Android phone in Termux, or Linux) from your gittw repo, with tw-web, m-sync and task notes
 
 name=mobilize
-version=0.10.3
+version=0.10.4
 type=wrapper
 description=Sets up a station (an Android phone in Termux, or Linux) from your gittw repo, with tw-web, m-sync and task notes
 repo=https://github.com/linuxcaffe/tw-mobilize
