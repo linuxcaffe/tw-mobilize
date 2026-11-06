@@ -25,6 +25,7 @@ python mobilize.py init --station <name> --data <your gittw repo's fetch URL>
 ```
 
 **`init` installs Taskwarrior 2.6.2, clones your tasks, sets up the station and tw-web, then checks it.**
+**Task notes** (an `nb:` on a task, its note made on the phone and opened on the desktop): [docs/task-notes.md](docs/task-notes.md).
 It stops once to show you an SSH key to add to GitHub/Codeberg, and waits until you have. Safe to run
 again: it picks up where it left off. On a station that already has your tasks: `tw -I mobilize`.
 
